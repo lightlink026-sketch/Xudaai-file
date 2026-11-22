@@ -40,10 +40,13 @@ class Workbench(tk.Tk):
         s.configure("NavActive.TButton",anchor="w",padding=(16,12),font=("Microsoft YaHei UI",10,"bold"),background="#e3efe8",foreground="#174b34",relief="flat")
         s.configure("Accent.TButton",padding=(14,9),background="#287252",foreground="white",font=("Microsoft YaHei UI",10,"bold"))
         s.map("Accent.TButton",background=[("active","#1c5d41")])
+        s.configure("Source.TButton",padding=(13,10),background="#ffffff",foreground="#174b34",font=("Microsoft YaHei UI",10,"bold"),relief="flat")
+        s.map("Source.TButton",background=[("active","#e3efe8")],foreground=[("active","#123d2a")])
         s.configure("Treeview",rowheight=34,font=("Microsoft YaHei UI",10),background="white",fieldbackground="white")
         s.configure("Treeview.Heading",font=("Microsoft YaHei UI",10,"bold"),padding=7)
         s.configure("TNotebook",background="#f3f6f4",borderwidth=0)
-        s.configure("TNotebook.Tab",padding=(13,8),font=("Microsoft YaHei UI",10))
+        s.configure("TNotebook.Tab",padding=(13,8),font=("Microsoft YaHei UI",10),background="#e7ece9",foreground="#42564c")
+        s.map("TNotebook.Tab",background=[("selected","#ffffff")],foreground=[("selected","#174b34")])
         s.configure("TEntry",padding=7)
 
     def _layout(self):
@@ -68,18 +71,22 @@ class Workbench(tk.Tk):
         self.pages={}
 
     def _build_ai_panel(self,parent):
-        self.ai_panel=ttk.Frame(parent,width=350,padding=(16,18));self.ai_panel.pack(side="right",fill="y");self.ai_panel.pack_propagate(False)
+        self.ai_panel=ttk.Frame(parent,width=318,padding=(14,14));self.ai_panel.pack(side="right",fill="y");self.ai_panel.pack_propagate(False)
         ttk.Label(self.ai_panel,text="模块 AI 助手",font=("Microsoft YaHei UI",14,"bold"),foreground="#173a2c").pack(anchor="w")
         ttk.Button(self.ai_panel,text="模型配置",command=lambda:self.show("设置")).pack(anchor="e",pady=(0,5))
         self.ai_module=tk.StringVar(value="正在协助：采集与导入")
-        ttk.Label(self.ai_panel,textvariable=self.ai_module,style="Muted.TLabel",wraplength=300).pack(anchor="w",pady=(3,10))
+        ttk.Label(self.ai_panel,textvariable=self.ai_module,style="Muted.TLabel",wraplength=275).pack(anchor="w",pady=(3,8))
         self.ai_suggestions=ttk.Frame(self.ai_panel);self.ai_suggestions.pack(fill="x",pady=(0,10))
         chat_frame=ttk.Frame(self.ai_panel,style="Card.TFrame");chat_frame.pack(fill="both",expand=True)
-        self.chat=tk.Text(chat_frame,height=16,wrap="word",font=("Microsoft YaHei UI",10),state="disabled",relief="flat",padx=10,pady=10,background="white")
+        self.chat=tk.Text(chat_frame,height=8,wrap="word",font=("Microsoft YaHei UI",10),state="disabled",relief="flat",padx=10,pady=10,background="white")
         scroll=ttk.Scrollbar(chat_frame,orient="vertical",command=self.chat.yview);self.chat.configure(yscrollcommand=scroll.set);self.chat.pack(side="left",fill="both",expand=True);scroll.pack(side="right",fill="y")
-        row=ttk.Frame(self.ai_panel);row.pack(fill="x",pady=(10,0));self.prompt=tk.Text(row,height=4,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.prompt.pack(side="left",fill="x",expand=True)
+        # Pin the composer to the bottom so it remains available on shorter screens.
+        compose=ttk.Frame(self.ai_panel);compose.pack(side="bottom",fill="x",pady=(10,0))
+        ttk.Label(compose,text="输入问题或粘贴链接",style="Muted.TLabel").pack(anchor="w",pady=(0,4))
+        row=ttk.Frame(compose);row.pack(fill="x")
+        self.prompt=tk.Text(row,height=2,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.prompt.pack(side="left",fill="x",expand=True)
         ttk.Button(row,text="发送",style="Accent.TButton",command=self.ai_send).pack(side="right",padx=(8,0),anchor="s")
-        ttk.Label(self.ai_panel,text="AI 会按当前模块和选中资料回答；写入字段前会让你确认。",style="Muted.TLabel",wraplength=305).pack(anchor="w",pady=(7,0))
+        ttk.Label(compose,text="AI 按当前模块提供帮助；写入资料前会先确认。",style="Muted.TLabel",wraplength=275).pack(anchor="w",pady=(6,0))
         self._chat_line("助手","你好，我会根据你当前打开的功能协助处理。可以提问、粘贴链接或要求检查当前产品资料。")
         self._refresh_ai_module()
 
@@ -142,16 +149,23 @@ class Workbench(tk.Tk):
         ttk.Button(b,text="开始采集 / 导入",style="Accent.TButton",command=lambda:self.show("采集与导入")).pack(anchor="w",pady=(12,0))
 
     def build_collect(self,p):
-        nb=ttk.Notebook(p); nb.pack(fill="both",expand=True);self.collect_notebook=nb
+        # Put the three workflows in a visible launcher row; users should not
+        # have to discover secondary notebook tabs to find a collector.
+        launcher=ttk.Frame(p);launcher.pack(fill="x",pady=(0,10))
+        ttk.Label(launcher,text="选择来源",font=("Microsoft YaHei UI",11,"bold")).pack(side="left",padx=(2,12))
+        nb=ttk.Notebook(p); self.collect_notebook=nb
         yup=ttk.Frame(nb,padding=18); cli=ttk.Frame(nb,padding=18); imp=ttk.Frame(nb,padding=18);self.yupoo_tab=yup;self.cli_tab=cli;self.import_tab=imp
         nb.add(yup,text="又拍采集器"); nb.add(cli,text="1688 / OpenCLI"); nb.add(imp,text="Excel / 本地资料")
+        for label,tab in (("① 又拍链接下载",yup),("② 1688 AI 采集",cli),("③ Excel / 本地导入",imp)):
+            ttk.Button(launcher,text=label,style="Source.TButton",command=lambda target=tab:nb.select(target)).pack(side="left",padx=(0,8))
+        nb.pack(fill="both",expand=True)
         c=self._card(yup,"又拍商品采集","粘贴一个或多个类目/相册链接。采集后会自动整理到标准产品档案，并进入产品复核。")
-        ttk.Label(c,text="又拍链接（每行一个）",background="white").pack(anchor="w",pady=(2,5))
-        self.yupoo_urls=tk.Text(c,height=5,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.yupoo_urls.pack(fill="x")
+        ttk.Label(c,text="粘贴又拍类目或相册链接 · 每行一个",background="white").pack(anchor="w",pady=(2,5))
+        self.yupoo_urls=tk.Text(c,height=3,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.yupoo_urls.pack(fill="x")
         row=ttk.Frame(c,style="Card.TFrame");row.pack(fill="x",pady=(10,0))
-        ttk.Label(row,text="归档位置",background="white").pack(side="left")
-        self.archive_location=tk.StringVar(value=str(self.output));ttk.Label(row,textvariable=self.archive_location,background="white",foreground="#65766d").pack(side="left",padx=8)
-        ttk.Button(row,text="开始采集并归档",style="Accent.TButton",command=self.start_yupoo).pack(side="right")
+        ttk.Label(row,text="标准档案位置",background="white").pack(side="left")
+        self.archive_location=tk.StringVar(value=str(self.output));ttk.Label(row,textvariable=self.archive_location,background="white",foreground="#65766d").pack(side="left",padx=8,fill="x",expand=True)
+        ttk.Button(row,text="开始下载并归档",style="Accent.TButton",command=self.start_yupoo).pack(side="right",padx=(8,0))
         self.yupoo_backend=ttk.Frame(yup)
         # Keep the supplied app.py implementation as the embedded worker; its
         # legacy spreadsheet screen is not part of the unified product workflow.
