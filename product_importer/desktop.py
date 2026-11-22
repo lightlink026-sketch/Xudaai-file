@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from core import DOC_EXTS, IMAGE_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, read_product_rows, read_text, scan_product_folder
+from yupoo_tool import App as YupooApp
 
 APP_TITLE = "Xudaai 产品资料整理工具"
 CONFIG_PATH = Path.home() / ".xudaai-product-importer.json"
@@ -64,6 +65,12 @@ class ProductImporter(tk.Tk):
         self._build()
 
     def _build(self) -> None:
+        menubar = tk.Menu(self)
+        tools_menu = tk.Menu(menubar, tearoff=False)
+        tools_menu.add_command(label="Yupoo 相册下载 / Excel / PDF", command=self._open_yupoo_tool)
+        menubar.add_cascade(label="工具", menu=tools_menu)
+        self.configure(menu=menubar)
+
         outer = ttk.Frame(self, padding=14)
         outer.pack(fill="both", expand=True)
         ttk.Label(outer, text="本地产品资料整理", font=("Microsoft YaHei UI", 18, "bold")).pack(anchor="w")
@@ -200,6 +207,13 @@ class ProductImporter(tk.Tk):
         self.bind_all("<MouseWheel>", self._product_mousewheel)
         self.bind_all("<Button-4>", self._product_mousewheel)
         self.bind_all("<Button-5>", self._product_mousewheel)
+
+    def _open_yupoo_tool(self) -> None:
+        try:
+            window = tk.Toplevel(self)
+            YupooApp(window)
+        except Exception as exc:
+            messagebox.showerror(APP_TITLE, f"打开 Yupoo 功能窗口失败：\n{exc}")
 
     def _product_mousewheel(self, event) -> str:
         if self.workflow.select() != str(self.product_page_host):
