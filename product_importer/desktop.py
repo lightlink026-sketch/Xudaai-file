@@ -46,8 +46,8 @@ class ProductImporter(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1120x860")
-        self.minsize(950, 700)
+        self.geometry("1120x800")
+        self.minsize(900, 620)
         self.info: dict[str, Any] | None = None
         self.package_dir: Path | None = None
         self.product: dict[str, Any] | None = None
@@ -155,7 +155,7 @@ class ProductImporter(tk.Tk):
 
         transcript_box = ttk.LabelFrame(pane, text="整理记录", padding=6)
         transcript_box.pack(fill="both", expand=True)
-        self.chat_transcript = tk.Text(transcript_box, height=14, wrap="word", state="disabled", font=("Microsoft YaHei UI", 10))
+        self.chat_transcript = tk.Text(transcript_box, height=8, wrap="word", state="disabled", font=("Microsoft YaHei UI", 10))
         scroll = ttk.Scrollbar(transcript_box, orient="vertical", command=self.chat_transcript.yview)
         self.chat_transcript.configure(yscrollcommand=scroll.set)
         self.chat_transcript.pack(side="left", fill="both", expand=True)
@@ -164,7 +164,7 @@ class ProductImporter(tk.Tk):
 
         composer = ttk.Frame(pane)
         composer.pack(fill="x", pady=(8, 0))
-        self.chat_input = tk.Text(composer, height=4, wrap="word", font=("Microsoft YaHei UI", 10))
+        self.chat_input = tk.Text(composer, height=3, wrap="word", font=("Microsoft YaHei UI", 10))
         self.chat_input.pack(side="left", fill="both", expand=True, padx=(0, 8))
         buttons = ttk.Frame(composer)
         buttons.pack(side="right", fill="y")
