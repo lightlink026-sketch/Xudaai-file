@@ -452,7 +452,9 @@ class ProductImporter(tk.Tk):
 
     def _discover_folder_products(self, root: Path) -> list[tuple[Path, str]]:
         asset_names = {"图片", "主图", "副图", "产品图", "详情图", "images", "image", "photos", "photo", "videos", "video", "资料", "文件", "docs", "documents", "规格"}
-        children = [path for path in sorted(root.iterdir()) if path.is_dir() and not path.is_symlink() and path.name.casefold() not in asset_names and self._has_supported_file(path)]
+        non_supplier_names = {"公司资料", "国际货运报价", "运费资料", "产品资料", "客户资料", "报价单", "团队规则"}
+        ignored_names = asset_names | {name.casefold() for name in non_supplier_names}
+        children = [path for path in sorted(root.iterdir()) if path.is_dir() and not path.is_symlink() and path.name.casefold() not in ignored_names and self._has_supported_file(path)]
         direct_files = [path for path in root.glob("*") if path.is_file() and path.suffix.lower() in SUPPORTED_EXTS]
         if direct_files and not children:
             return [(root, "")]
@@ -466,7 +468,10 @@ class ProductImporter(tk.Tk):
                 candidates.append((supplier_dir, root.name))
         if not candidates and self._has_supported_file(root):
             candidates.append((root, ""))
-        return candidates[:200]
+        # Do not silently truncate at 200: large supplier roots commonly contain
+        # hundreds of product folders per supplier. The configured scan-file
+        # limit bounds this batch's source size; keep every discovered product.
+        return candidates
 
     def _discover_batch_products(self, root_info: dict[str, Any], extra: Path | None, max_files: int) -> list[dict[str, Any]]:
         root = Path(root_info["folder"])
