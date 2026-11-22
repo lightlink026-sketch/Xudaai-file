@@ -73,7 +73,10 @@ class ProductImporter(tk.Tk):
 
         outer = ttk.Frame(self, padding=14)
         outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="本地产品资料整理", font=("Microsoft YaHei UI", 18, "bold")).pack(anchor="w")
+        header = ttk.Frame(outer)
+        header.pack(fill="x")
+        ttk.Label(header, text="本地产品资料整理", font=("Microsoft YaHei UI", 18, "bold")).pack(side="left", anchor="w")
+        ttk.Button(header, text="打开 Yupoo 下载 / Excel / PDF 工具", command=self._open_yupoo_tool).pack(side="right", padx=4)
         ttk.Label(outer, text="按批次整理供应商和多个产品：导入资料、AI 辅助归档、人工确认，再统一生成并上传。", wraplength=1050).pack(anchor="w", pady=(4, 12))
 
         self.source_var = tk.StringVar()

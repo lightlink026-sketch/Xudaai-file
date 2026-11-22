@@ -2,7 +2,7 @@
 
 Windows 本地桌面工具。一次整理一个批次，支持一个供应商目录下多款产品，也支持一个批次目录下多个供应商、每家多款产品。供应商 ZIP 包由员工先在本机解压；1688 资料由员工下载成 Excel/文件后导入。
 
-顶部“工具”菜单集成 Yupoo 相册下载与商品报价表功能：批量下载相册图片、维护下载总记录、生成/回写 Excel、按 Excel 内容和顺序生成 PDF。该功能的 Python 源码与证书模块一并包含在 `yupoo_tool.py`、`ca_bundle.py` 中，作为主程序内的窗口运行，不依赖旁置的 Yupoo EXE。
+主界面标题栏右侧按钮和顶部“工具”菜单都可打开 Yupoo 相册下载与商品报价表功能：批量下载相册图片、维护下载总记录、生成/回写 Excel、按 Excel 内容和顺序生成 PDF。该功能的 Python 源码与证书模块一并包含在 `yupoo_tool.py`、`ca_bundle.py` 中，作为主程序内的窗口运行，不依赖旁置的 Yupoo EXE。
 
 ## 本地运行
 
@@ -25,7 +25,7 @@ Windows 本地桌面工具。一次整理一个批次，支持一个供应商目
 
 ## Yupoo 工具菜单
 
-“工具”→“Yupoo 相册下载 / Excel / PDF”会在同一应用中打开相册工具窗口，可输入一个或多个 Yupoo 类目链接、下载图片、生成 Excel、将表格字段回写到商品详情 TXT，并按所选 Excel 生成 PDF。对应实现代码在 `yupoo_tool.py`，内置 CA 证书在 `ca_bundle.py`；打包依赖列于同一目录的 `requirements.txt`。
+点击主界面标题栏右侧的“打开 Yupoo 下载 / Excel / PDF 工具”，或使用“工具”→“Yupoo 相册下载 / Excel / PDF”，会在同一应用中打开相册工具窗口，可输入一个或多个 Yupoo 类目链接、下载图片、生成 Excel、将表格字段回写到商品详情 TXT，并按所选 Excel 生成 PDF。对应实现代码在 `yupoo_tool.py`，内置 CA 证书在 `ca_bundle.py`；打包依赖列于同一目录的 `requirements.txt`。
 
 ## 数据和隐私
 
