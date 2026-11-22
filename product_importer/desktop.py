@@ -68,6 +68,7 @@ class ProductImporter(tk.Tk):
         paths.pack(fill="x", pady=4)
         self.source_var = tk.StringVar()
         self.excel_var = tk.StringVar()
+        self.excel_var.trace_add("write", self._source_changed)
         self.output_var = tk.StringVar(value=self.config_data.get("output_dir", str(Path.home() / "Documents" / "Xudaai产品档案")))
         self.server_var = tk.StringVar(value=self.config_data.get("server_url", "http://127.0.0.1:8002"))
         self.user_var = tk.StringVar(value=self.config_data.get("server_user", "admin"))
@@ -314,7 +315,7 @@ class ProductImporter(tk.Tk):
             self.chat_transcript.configure(state="normal")
             self.chat_transcript.delete("1.0", "end")
             self.chat_transcript.configure(state="disabled")
-            self._append_chat_display("助手", "资料目录已更换，请先扫描新产品文件夹再继续对话。")
+            self._append_chat_display("助手", "资料来源已更改，请先重新扫描再继续对话。")
 
     def _scan(self) -> None:
         source_value = self.source_var.get().strip()
