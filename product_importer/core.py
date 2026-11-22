@@ -19,6 +19,17 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac"}
 DOC_EXTS = {".pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".txt", ".md", ".csv", ".json"}
 SUPPORTED_EXTS = IMAGE_EXTS | VIDEO_EXTS | DOC_EXTS
+REQUIRED_PRODUCT_FIELDS = {
+    "name": "产品名称",
+    "supplier_name": "供应商",
+    "unit_price": "采购单价",
+    "carton_spec": "箱规尺寸",
+    "gross_weight_kg_per_carton": "单箱毛重",
+}
+
+
+def missing_product_fields(values: dict[str, Any]) -> list[str]:
+    return [label for key, label in REQUIRED_PRODUCT_FIELDS.items() if not str(values.get(key, "") or "").strip()]
 
 
 def file_sha256(path: Path) -> str:
@@ -84,20 +95,20 @@ def read_text(path: Path, max_chars: int = 30000) -> str:
 
 
 PRODUCT_COLUMN_ALIASES = {
-    "name": {"产品名称", "产品名", "品名", "商品名称", "商品名", "款名", "product name", "product", "name"},
+    "name": {"产品名称", "产品名", "品名", "商品名称", "商品名", "商品标题", "产品标题", "标题", "款名", "product name", "product", "name", "title"},
     "supplier_name": {"供应商", "供应商名称", "供货商", "厂家", "供应厂家", "supplier", "supplier name", "vendor"},
     "brand": {"品牌", "brand"}, "category": {"产品分类", "类别", "分类", "category"},
     "model": {"产品型号", "型号", "model"}, "sku": {"sku", "自有sku", "产品sku", "货号"},
     "supplier_sku": {"供应商型号", "供应商sku", "供应商货号", "工厂货号", "supplier sku"},
     "description": {"产品描述", "描述", "卖点", "description"}, "material": {"材质", "材料", "material"},
     "colors": {"颜色", "颜色/变体", "颜色变体", "color"}, "sizes": {"尺码", "尺寸", "规格", "size"},
-    "currency": {"币种", "货币", "currency"}, "unit_price": {"采购单价", "单价", "价格", "批发价", "price"},
+    "currency": {"币种", "货币", "价格币种", "currency"}, "unit_price": {"采购单价", "单价", "价格", "批发价", "price"},
     "moq": {"moq", "起订量", "最小起订量", "起订"}, "unit": {"单位", "销售单位", "unit"},
-    "carton_spec": {"箱规", "外箱尺寸", "包装尺寸", "carton spec"},
+    "carton_spec": {"箱规", "外箱尺寸", "包装尺寸", "箱规（长×宽×高及单位）", "carton spec", "箱规/carton dimensions", "一箱箱规/cbm"},
     "units_per_carton": {"单箱装量", "每箱数量", "装箱数", "pcs/carton"},
     "carton_volume_cbm": {"单箱体积", "体积cbm", "cbm/ctn"},
-    "gross_weight_kg_per_carton": {"单箱毛重", "毛重/箱", "gross weight"},
-    "net_weight_kg_per_carton": {"单箱净重", "净重/箱", "net weight"},
+    "gross_weight_kg_per_carton": {"单箱毛重", "单箱毛重 kg", "毛重/箱", "gross weight", "单箱毛重/gross weight kg"},
+    "net_weight_kg_per_carton": {"单箱净重", "单箱净重 kg", "净重/箱", "net weight", "单箱净重/net weight kg"},
 }
 
 
@@ -239,6 +250,7 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
         shutil.copy2(extra_excel, target)
         source_manifest.append({"path": target.relative_to(destination).as_posix(), "source": str(extra_excel), "sha256": file_sha256(extra_excel)})
 
+    missing_fields = missing_product_fields(values)
     product = {
         "schema_version": 1,
         "product_id": product_id,
@@ -267,7 +279,8 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
         "lead_time": str(values.get("lead_time", "")).strip(),
         "notes": str(values.get("notes", "")).strip(),
         "field_sources": values.get("field_sources", {}),
-        "review_status": "human_confirmed",
+        "review_status": "needs_info" if missing_fields else "ready_for_review",
+        "missing_fields": missing_fields,
         "source_folder_name": source_root.name,
         "images": image_manifest,
         "videos": video_manifest,

@@ -13,8 +13,10 @@ from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
 import httpx
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 
-from core import DOC_EXTS, IMAGE_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, read_product_rows, read_text, scan_product_folder
+from core import DOC_EXTS, IMAGE_EXTS, REQUIRED_PRODUCT_FIELDS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, missing_product_fields, read_product_rows, read_text, scan_product_folder
 from yupoo_tool import App as YupooApp
 
 APP_TITLE = "Xudaai 产品资料整理工具"
@@ -119,13 +121,16 @@ class ProductImporter(tk.Tk):
 
         paths = ttk.LabelFrame(product_page, text="选择资料批次", padding=10)
         paths.pack(fill="x", pady=(0, 8))
-        self._path_row(paths, 0, "供应商/产品资料", self.source_var, self._choose_source, "选择文件夹")
-        self._path_row(paths, 1, "补充 Excel（可选）", self.excel_var, self._choose_excel, "选择 Excel")
-        ttk.Label(paths, text="目录扫描文件上限").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Spinbox(paths, from_=1, to=30000, textvariable=self.max_files_var, width=9).grid(row=2, column=1, sticky="w", pady=(8, 0))
+        ttk.Label(paths, text="又拍下载目录、1688/OpenCLI 导出的 Excel、人工整理资料均可导入；可组合选择。", wraplength=980).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
+        self._path_row(paths, 1, "人工/又拍资料目录", self.source_var, self._choose_source, "选择文件夹")
+        self._path_row(paths, 2, "1688/OpenCLI 或补充 Excel", self.excel_var, self._choose_excel, "选择 Excel")
+        ttk.Button(paths, text="又拍链接下载", command=self._open_yupoo_tool).grid(row=3, column=0, sticky="w", pady=(3, 0))
+        ttk.Label(paths, text="下载后选择供应商目录；Excel 按供应商和产品行建立批次。", foreground="#68736b").grid(row=3, column=1, columnspan=2, sticky="w", pady=(3, 0))
+        ttk.Label(paths, text="目录扫描文件上限").grid(row=4, column=0, sticky="w", pady=(8, 0))
+        ttk.Spinbox(paths, from_=1, to=30000, textvariable=self.max_files_var, width=9).grid(row=4, column=1, sticky="w", pady=(8, 0))
         self.scan_button = ttk.Button(paths, text="扫描并读取资料", command=self._scan)
-        self.scan_button.grid(row=2, column=2, sticky="e", pady=(8, 0))
-        ttk.Label(paths, text="默认 500，可设 1–30000。资料库单个产品包仍限制 250 个文件。", foreground="#68736b").grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        self.scan_button.grid(row=4, column=2, sticky="e", pady=(8, 0))
+        ttk.Label(paths, text="默认 500，可设 1–30000。资料库单个产品包仍限制 250 个文件；缺少价格、箱规或毛重会标记待补。", foreground="#68736b", wraplength=980).grid(row=5, column=0, columnspan=3, sticky="w", pady=(5, 0))
         paths.columnconfigure(1, weight=1)
 
         batch_frame = ttk.LabelFrame(product_page, text="本批产品清单：一个供应商可有多款产品；一个批次也可包含多个供应商", padding=8)
@@ -140,7 +145,7 @@ class ProductImporter(tk.Tk):
         ttk.Label(actions, textvariable=self.batch_count_var).pack(side="right")
         batch_columns = ("supplier", "name", "source", "status")
         self.batch_tree = ttk.Treeview(batch_frame, columns=batch_columns, show="headings", height=4, selectmode="browse")
-        for column, title, width in (("supplier", "供应商", 180), ("name", "产品名称", 260), ("source", "资料来源", 420), ("status", "状态", 100)):
+        for column, title, width in (("supplier", "供应商", 180), ("name", "产品名称", 260), ("source", "资料来源", 420), ("status", "补充状态", 220)):
             self.batch_tree.heading(column, text=title)
             self.batch_tree.column(column, width=width, minwidth=80, stretch=column == "source")
         batch_scroll = ttk.Scrollbar(batch_frame, orient="vertical", command=self.batch_tree.yview)
@@ -188,6 +193,7 @@ class ProductImporter(tk.Tk):
         output_page = ttk.Frame(workflow, padding=14)
         workflow.add(output_page, text="3 生成与上传")
         ttk.Label(output_page, text="批次复核完成后，在此生成各产品的标准档案并上传到现有资料库。", wraplength=980).pack(anchor="w", pady=(0, 12))
+        ttk.Button(output_page, text="生成统一产品资料模板（文件夹 + Excel）", command=self._create_folder_template).pack(anchor="w", pady=(0, 10))
         output_path = ttk.LabelFrame(output_page, text="标准档案保存位置", padding=9)
         output_path.pack(fill="x", pady=(0, 10))
         self._path_row(output_path, 0, "输出位置", self.output_var, self._choose_output, "选择位置")
@@ -218,6 +224,34 @@ class ProductImporter(tk.Tk):
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"打开 Yupoo 功能窗口失败：\n{exc}")
 
+    def _create_folder_template(self) -> None:
+        selected = filedialog.askdirectory(title="选择统一产品资料模板的保存位置")
+        if not selected:
+            return
+        root = Path(selected) / "产品资料标准模板" / "供应商名称" / "产品名称"
+        if root.exists() and any(root.iterdir()):
+            messagebox.showinfo(APP_TITLE, f"模板目录已有内容，为避免覆盖，未写入文件：\n{root}")
+            return
+        for relative in ("图片/主图", "图片/副图", "视频", "原始资料", "规格"):
+            (root / relative).mkdir(parents=True, exist_ok=True)
+        blank = {key: "" for key, _, _ in FIELDS}
+        blank.update({"schema_version": 1, "review_status": "needs_info", "missing_fields": list(REQUIRED_PRODUCT_FIELDS.values()), "field_sources": {}})
+        (root / "产品档案.json").write_text(json.dumps(blank, ensure_ascii=False, indent=2), encoding="utf-8")
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "产品清单"
+        headers = [label for _, label, _ in FIELDS]
+        sheet.append(headers)
+        sheet.append([""] * len(headers))
+        for column, label in enumerate(headers, start=1):
+            sheet.column_dimensions[get_column_letter(column)].width = max(16, min(30, len(label) * 2 + 4))
+        workbook.save(root / "产品信息模板.xlsx")
+        detail_lines = ["产品名称：", "供应商：", "产品分类：", "品牌/型号/SKU：", "采购单价/币种：", "颜色/尺码：", "材质/描述：", "MOQ：", "箱规（长×宽×高及单位）：", "单箱装量/箱数：", "单箱体积 CBM：", "单箱毛重 kg：", "单箱净重 kg：", "生产/交期：", "来源链接/文件：", "其他备注："]
+        (root / "商品详情.txt").write_text("\n".join(detail_lines) + "\n", encoding="utf-8")
+        guide = "标准产品资料目录（一个产品一个目录）\n\n- 产品档案.json：标准字段；未知内容留空，不猜测。\n- 商品详情.txt：人工补充信息；重新下载时保留已有非空内容。\n- 图片/主图：放一张主图；图片/副图放其他图片。\n- 视频：放产品视频。\n- 规格：放尺寸图、色卡等规格资料。\n- 原始资料：保留供应商原始 Excel/PDF/报价/说明文件。\n\n多个产品：每个产品各建一个目录；可按“供应商/产品”分层。关键项：产品名称、供应商、采购单价、箱规尺寸、单箱毛重。未知项留空，导入后会标记待补。\n"
+        (root / "整理说明.txt").write_text(guide, encoding="utf-8")
+        messagebox.showinfo(APP_TITLE, f"已创建统一资料模板：\n{root.parent.parent}")
+
     def _product_mousewheel(self, event) -> str:
         if self.workflow.select() != str(self.product_page_host):
             return ""
@@ -238,7 +272,7 @@ class ProductImporter(tk.Tk):
         notebook.add(pane, text="AI 整理对话")
         ttk.Label(
             pane,
-            text="围绕当前产品连续整理：询问资料内容、补充更正信息，或让 AI 建议分类。AI 会标明依据；确认后才回填字段。",
+            text="围绕当前产品连续整理：询问资料内容、补充价格/箱规/重量，或让 AI 建议分类。AI 会标明依据；确认后才回填字段。模型地址和名称保存在本机，API Key 仅保存在本次运行内存。",
             wraplength=1000,
         ).pack(anchor="w", pady=(0, 8))
 
@@ -590,7 +624,14 @@ class ProductImporter(tk.Tk):
         if children:
             self.batch_tree.delete(*children)
         for index, item in enumerate(self.batch_products):
-            self.batch_tree.insert("", "end", iid=str(index), values=(item.get("supplier_name", ""), item.get("name", ""), item.get("source_label", ""), item.get("status", "待复核")))
+            values = item.get("values", {})
+            missing = missing_product_fields(values)
+            status = item.get("status", "待复核")
+            if missing and not str(status).startswith("档案已生成"):
+                status = "待补资料：" + "、".join(missing)
+            elif missing and str(status).startswith("档案已生成"):
+                status = "已生成 · 待补：" + "、".join(missing)
+            self.batch_tree.insert("", "end", iid=str(index), values=(item.get("supplier_name", ""), item.get("name", ""), item.get("source_label", ""), status))
         if selected_index is not None and selected_index < len(self.batch_products):
             self.batch_tree.selection_set(str(selected_index))
             self.batch_tree.see(str(selected_index))
@@ -602,9 +643,11 @@ class ProductImporter(tk.Tk):
         values = self._all_values()
         if getattr(self, "ai_sources", None):
             values["field_sources"] = self.ai_sources
-        self.batch_products[index].update({"values": values, "supplier_name": values.get("supplier_name", ""), "name": values.get("name", ""), "main_image": self.main_image_var.get(), "status": "待复核"})
+        missing = missing_product_fields(values)
+        status = "待补资料：" + "、".join(missing) if missing else "信息齐全，待复核"
+        self.batch_products[index].update({"values": values, "supplier_name": values.get("supplier_name", ""), "name": values.get("name", ""), "main_image": self.main_image_var.get(), "status": status})
         if hasattr(self, "batch_tree") and self.batch_tree.exists(str(index)):
-            self.batch_tree.item(str(index), values=(values.get("supplier_name", ""), values.get("name", ""), self.batch_products[index].get("source_label", ""), "待复核"))
+            self.batch_tree.item(str(index), values=(values.get("supplier_name", ""), values.get("name", ""), self.batch_products[index].get("source_label", ""), status))
 
     def _load_batch_product(self, index: int) -> None:
         if index < 0 or index >= len(self.batch_products):
@@ -791,7 +834,7 @@ class ProductImporter(tk.Tk):
             content = payload["choices"][0]["message"]["content"]
             content = content.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
             result = json.loads(content)
-            self.after(0, lambda: self._apply_ai_result(result))
+            self.after(0, lambda: self._confirm_ai_extract(result))
         except Exception as exc:
             error_text = str(exc)
             self.after(0, lambda message=error_text: self.status_var.set(f"AI 提取失败：{message}"))
@@ -811,6 +854,18 @@ class ProductImporter(tk.Tk):
             self.ai_sources = result["field_sources"]
         self._save_active_product()
         self.status_var.set("AI 草稿已填入。请逐项核对供应商、价格、单位、箱规和重量后再生成正式档案。")
+
+    def _confirm_ai_extract(self, result: dict[str, Any]) -> None:
+        if not isinstance(result, dict):
+            self.status_var.set("AI 返回格式无法识别，请手工整理。")
+            return
+        labels = {key: label for key, label, _ in FIELDS}
+        preview = [f"{labels[key]}：{str(value)[:160]}" for key, value in result.items() if key in self.vars and str(value or "").strip()]
+        if not preview:
+            messagebox.showinfo(APP_TITLE, "AI 没有从资料中提取到可填字段；请用对话补充或手工填写。")
+            return
+        if messagebox.askyesno(APP_TITLE, "以下是 AI 提取草稿，确认后才回填字段：\n\n" + "\n".join(preview[:18])):
+            self._apply_ai_result(result)
 
     def _generate_package(self) -> None:
         if not self.batch_products:
@@ -838,8 +893,9 @@ class ProductImporter(tk.Tk):
             self.package_dir, self.product = generated[0]
             self._save_config()
             self._refresh_batch_tree()
-            self.status_var.set(f"已生成 {len(generated)} 个标准产品档案，请抽查后上传。")
-            messagebox.showinfo(APP_TITLE, f"本批已生成 {len(generated)} 个标准产品档案。\n输出位置：{output}")
+            incomplete = sum(bool(manifest.get("missing_fields")) for _, manifest in generated)
+            self.status_var.set(f"已生成 {len(generated)} 个标准产品档案；其中 {incomplete} 款待补关键信息。")
+            messagebox.showinfo(APP_TITLE, f"本批已生成 {len(generated)} 个标准产品档案。\n待补关键信息：{incomplete} 款（清单和产品档案.json 中列出具体缺项）。\n输出位置：{output}")
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
 

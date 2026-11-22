@@ -29,7 +29,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, 
 from reportlab.lib.units import mm
 
 APP_TITLE = 'Yupoo 相册下载与报价表生成器'
-HEADERS = ['编号/num', '尺码/size', '单价/price(RMB)', '单价/price (USD)', '最小起定量/MOQ', '一箱箱规/cbm', '备注/remark', '图片/picture', '二维码看详情 /QR code for details']
+HEADERS = ['编号/num', '尺码/size', '单价/price(RMB)', '单价/price (USD)', '最小起定量/MOQ', '箱规/Carton dimensions', '单箱体积/CBM', '单箱毛重/Gross weight kg', '单箱净重/Net weight kg', '备注/remark', '图片/picture', '二维码看详情 /QR code for details']
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36'
 
 class PageParser(HTMLParser):
@@ -175,8 +175,8 @@ def publish_temp_file(temp_path,target_path):
             candidate=target_path.with_name(f'{target_path.stem}_{stamp}_{n}{target_path.suffix}');n+=1
         os.replace(temp_path,candidate);return candidate
 
-DETAIL_FIELDS=['尺码/size','单价/price(RMB)','单价/price (USD)','最小起定量/MOQ','一箱箱规/cbm','备注/remark']
-SOURCE_URL_COL=10
+DETAIL_FIELDS=['尺码/size','单价/price(RMB)','单价/price (USD)','最小起定量/MOQ','箱规/Carton dimensions','单箱体积/CBM','单箱毛重/Gross weight kg','单箱净重/Net weight kg','备注/remark']
+SOURCE_URL_COL=len(HEADERS)+1
 DOWNLOAD_LOG_NAME='下载总记录.xlsx'
 DOWNLOAD_LOG_HEADERS=['供货商/account','链接/url','产品数量','最近检查时间','下载状态','本地目录','相册ID校验']
 FIELD_HEADER_ALIASES={
@@ -184,7 +184,10 @@ FIELD_HEADER_ALIASES={
     '单价/price(RMB)':('单价/price(RMB)','单价/price (RMB)','单价/price（RMB）','单价/price'),
     '单价/price (USD)':('单价/price (USD)','单价/price(USD)','单价/price（USD）'),
     '最小起定量/MOQ':('最小起定量/MOQ',),
-    '一箱箱规/cbm':('一箱箱规/cbm',),
+    '箱规/Carton dimensions':('箱规/Carton dimensions','箱规','外箱尺寸','包装尺寸','Carton dimensions','一箱箱规/cbm'),
+    '单箱体积/CBM':('单箱体积/CBM','单箱体积','CBM/CTN'),
+    '单箱毛重/Gross weight kg':('单箱毛重/Gross weight kg','单箱毛重','毛重/箱','Gross weight kg'),
+    '单箱净重/Net weight kg':('单箱净重/Net weight kg','单箱净重','净重/箱','Net weight kg'),
     '备注/remark':('备注/remark',),
 }
 
@@ -287,10 +290,19 @@ def read_product_detail(folder):
 
 def write_product_detail(folder,title,url,values=None):
     folder=Path(folder);path=folder/'商品详情.txt';old=read_product_detail(folder)
-    merged={k:old.get(k,'') for k in DETAIL_FIELDS}
-    for key,value in (values or {}).items():
-        if key in DETAIL_FIELDS and value is not None and str(value).strip()!='':merged[key]=str(value).strip()
-    lines=[f'商品名称：{title}',f'相册链接：{url}']+[f'{key}：{merged.get(key,"")}' for key in DETAIL_FIELDS]
+    merged={k:str((values or {}).get(k) or '').strip() for k in DETAIL_FIELDS}
+    # Existing non-empty values are treated as human-maintained data and win
+    # over stale workbook values when a supplier album is refreshed.
+    for key in DETAIL_FIELDS:
+        if str(old.get(key) or '').strip():merged[key]=str(old[key]).strip()
+    known={normalize_header(alias) for aliases in FIELD_HEADER_ALIASES.values() for alias in aliases}
+    known.update({normalize_header('商品名称'),normalize_header('相册链接')})
+    extras=[]
+    if path.exists():
+        for line in path.read_text(encoding='utf-8-sig').splitlines():
+            if '：' in line and normalize_header(line.split('：',1)[0]) in known:continue
+            extras.append(line)
+    lines=[f'商品名称：{title}',f'相册链接：{url}']+[f'{key}：{merged.get(key,"")}' for key in DETAIL_FIELDS]+extras
     path.write_text('\n'.join(lines)+'\n',encoding='utf-8')
     return merged
 
@@ -348,7 +360,7 @@ def sync_excel_to_txt(root,log,excel_path=None):
 def write_excel(albums, root, out):
     wb=Workbook(); ws=wb.active; ws.title='报价表'; ws.append(HEADERS+['source_url'])
     navy='1F4E78'; thin=Side(style='thin',color='AAB8C7')
-    widths=[22,14,19,19,22,24,18,53,24,2]
+    widths=[22,14,19,19,22,24,16,22,22,24,53,24,2]
     for i,w in enumerate(widths,1): ws.column_dimensions[get_column_letter(i)].width=w
     for c in ws[1]:
         c.fill=PatternFill('solid',fgColor=navy); c.font=Font(name='Microsoft YaHei',size=12,bold=True,color='FFFFFF'); c.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True); c.border=Border(left=thin,right=thin,top=thin,bottom=thin)
@@ -359,15 +371,16 @@ def write_excel(albums, root, out):
         for c,key in enumerate(DETAIL_FIELDS,2):ws.cell(idx,c,details.get(key,''))
         ws.cell(idx,3).number_format='0.00';ws.cell(idx,4).number_format='0.00'
         ws.cell(idx,SOURCE_URL_COL,a.get('url',''))
-        for c in ws[idx][:7]: c.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True); c.border=Border(left=thin,right=thin,top=thin,bottom=thin)
+        for c in ws[idx][:len(DETAIL_FIELDS)+1]: c.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True); c.border=Border(left=thin,right=thin,top=thin,bottom=thin)
         cover=a.get('cover_path')
         if cover and Path(cover).exists():
-            im=XLImage(cover); ow,oh=im.width,im.height; im.width=375; im.height=375*oh/ow; ws.add_image(im,f'H{idx}'); ws.row_dimensions[idx].height=im.height*0.75
-        ws.cell(idx,8).border=Border(left=thin,right=thin,top=thin,bottom=thin); ws.cell(idx,9).border=Border(left=thin,right=thin,top=thin,bottom=thin);ws.cell(idx,SOURCE_URL_COL).border=Border(left=thin,right=thin,top=thin,bottom=thin)
+            im=XLImage(cover); ow,oh=im.width,im.height; im.width=375; im.height=375*oh/ow; ws.add_image(im,f'{get_column_letter(len(DETAIL_FIELDS)+2)}{idx}'); ws.row_dimensions[idx].height=im.height*0.75
+        picture_col=len(DETAIL_FIELDS)+2;qr_col=picture_col+1
+        ws.cell(idx,picture_col).border=Border(left=thin,right=thin,top=thin,bottom=thin); ws.cell(idx,qr_col).border=Border(left=thin,right=thin,top=thin,bottom=thin);ws.cell(idx,SOURCE_URL_COL).border=Border(left=thin,right=thin,top=thin,bottom=thin)
         qr_path=a.get('qr_path')
         if qr_path and Path(qr_path).exists():
-            qr=XLImage(qr_path); qr.width=140; qr.height=140; ws.add_image(qr,f'I{idx}')
-    ws.column_dimensions['J'].hidden=True;ws.freeze_panes='A2';ws.sheet_view.showGridLines=False
+            qr=XLImage(qr_path); qr.width=140; qr.height=140; ws.add_image(qr,f'{get_column_letter(qr_col)}{idx}')
+    ws.column_dimensions[get_column_letter(SOURCE_URL_COL)].hidden=True;ws.freeze_panes='A2';ws.sheet_view.showGridLines=False
     ws.page_setup.orientation='landscape'; ws.page_setup.paperSize=ws.PAPERSIZE_A3; ws.page_setup.fitToWidth=1;ws.page_setup.fitToHeight=0;ws.sheet_properties.pageSetUpPr.fitToPage=True
     target=Path(out); temp=target.with_name(f'.{target.stem}.{os.getpid()}.{time.time_ns()}.tmp{target.suffix}')
     wb.save(temp); return publish_temp_file(temp,target)
@@ -396,7 +409,8 @@ def write_pdf(albums, out):
                 value=details.get(key,''); text='' if value in (None,'') else str(value); text=text.replace('&','&amp;').replace('<','&lt;').replace('>','&gt;'); cells.append(Paragraph(text,body))
             cells.extend([fitted_image(a['cover_path'],220,300) if a.get('cover_path') else Paragraph('',body),fitted_image(a['qr_path'],72,72) if a.get('qr_path') and Path(a['qr_path']).exists() else Paragraph('',body)])
             data.append(cells)
-        t=Table(data,colWidths=[120,65,70,70,105,165,75,230,88],rowHeights=None,repeatRows=1)
+        widths=[120,65,70,70,105,145,75,90,90,75,230,88]
+        t=Table(data,colWidths=widths,rowHeights=None,repeatRows=1)
         t.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),colors.HexColor('#1F4E78')),('GRID',(0,0),(-1,-1),.6,colors.HexColor('#9EADBD')),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER'),('LEFTPADDING',(0,0),(-1,-1),5),('RIGHTPADDING',(0,0),(-1,-1),5),('LEFTPADDING',(7,1),(8,-1),3),('RIGHTPADDING',(7,1),(8,-1),3),('TOPPADDING',(0,0),(-1,-1),4),('BOTTOMPADDING',(0,0),(-1,-1),4),('ROWBACKGROUNDS',(0,1),(-1,-1),[colors.white,colors.HexColor('#F4F7FA')])]))
         story.append(t)
         if start+2<len(albums): story.append(PageBreak())
