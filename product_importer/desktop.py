@@ -112,10 +112,10 @@ class ProductImporter(tk.Tk):
         self._path_row(paths, 0, "供应商/产品资料", self.source_var, self._choose_source, "选择文件夹")
         self._path_row(paths, 1, "补充 Excel（可选）", self.excel_var, self._choose_excel, "选择 Excel")
         ttk.Label(paths, text="目录扫描文件上限").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Spinbox(paths, from_=1, to=10000, textvariable=self.max_files_var, width=9).grid(row=2, column=1, sticky="w", pady=(8, 0))
+        ttk.Spinbox(paths, from_=1, to=30000, textvariable=self.max_files_var, width=9).grid(row=2, column=1, sticky="w", pady=(8, 0))
         self.scan_button = ttk.Button(paths, text="扫描并读取资料", command=self._scan)
         self.scan_button.grid(row=2, column=2, sticky="e", pady=(8, 0))
-        ttk.Label(paths, text="默认 500，可设 1–10000。资料库单个产品包仍限制 250 个文件。", foreground="#68736b").grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
+        ttk.Label(paths, text="默认 500，可设 1–30000。资料库单个产品包仍限制 250 个文件。", foreground="#68736b").grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
         paths.columnconfigure(1, weight=1)
 
         batch_frame = ttk.LabelFrame(product_page, text="本批产品清单：一个供应商可有多款产品；一个批次也可包含多个供应商", padding=8)
@@ -412,10 +412,10 @@ class ProductImporter(tk.Tk):
         try:
             max_files = int(self.max_files_var.get().strip())
         except ValueError:
-            messagebox.showinfo(APP_TITLE, "请输入有效的目录文件扫描上限（1–10000）。")
+            messagebox.showinfo(APP_TITLE, "请输入有效的目录文件扫描上限（1–30000）。")
             return
-        if not 1 <= max_files <= 10000:
-            messagebox.showinfo(APP_TITLE, "目录文件扫描上限需在 1–10000 之间。")
+        if not 1 <= max_files <= 30000:
+            messagebox.showinfo(APP_TITLE, "目录文件扫描上限需在 1–30000 之间。")
             return
         if not source_value and not extra:
             messagebox.showinfo(APP_TITLE, "请选择供应商/产品文件夹，或至少选择一个包含产品清单的 Excel。")
@@ -829,9 +829,9 @@ class ProductImporter(tk.Tk):
         try:
             value = int(self.max_files_var.get().strip())
         except ValueError as exc:
-            raise ValueError("请输入有效的目录文件扫描上限（1–10000）。") from exc
-        if not 1 <= value <= 10000:
-            raise ValueError("目录文件扫描上限需在 1–10000 之间。")
+            raise ValueError("请输入有效的目录文件扫描上限（1–30000）。") from exc
+        if not 1 <= value <= 30000:
+            raise ValueError("目录文件扫描上限需在 1–30000 之间。")
         return value
 
     def _upload(self) -> None:

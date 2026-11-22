@@ -144,8 +144,8 @@ def scan_product_folder(folder: Path, extra_excel: Path | None = None, max_files
     folder = folder.resolve()
     if not folder.is_dir():
         raise ValueError("请选择一个产品资料文件夹。")
-    if not isinstance(max_files, int) or not 1 <= max_files <= 10000:
-        raise ValueError("单个产品目录扫描上限必须在 1–10000 个文件之间。")
+    if not isinstance(max_files, int) or not 1 <= max_files <= 30000:
+        raise ValueError("目录扫描上限必须在 1–30000 个文件之间。")
     files = sorted(path for path in folder.rglob("*") if path.is_file() and not path.is_symlink() and path.suffix.lower() in SUPPORTED_EXTS)
     if len(files) > max_files:
         raise ValueError(f"该扫描目录包含 {len(files)} 个受支持文件，超过当前上限 {max_files}。请调整上限或移出无关文件。")
