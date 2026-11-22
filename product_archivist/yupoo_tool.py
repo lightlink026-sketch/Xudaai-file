@@ -539,13 +539,13 @@ def load_albums_from_excel(book_path,log,image_dir):
     return result
 
 class App:
-    def __init__(self, root, embedded=False):
-        self.root=root
+    def __init__(self, root, embedded=False, on_complete=None):
+        self.root=root;self.embedded=embedded;self.on_complete=on_complete
         if not embedded:
             root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620)
         self.q=queue.Queue();self.busy=False
         style=ttk.Style();style.configure('TButton',padding=7);style.configure('Header.TLabel',font=('Microsoft YaHei UI',15,'bold'))
-        main=ttk.Frame(root,padding=16);main.pack(fill='both',expand=True)
+        main=ttk.Frame(root,padding=16);main.pack(fill='both',expand=True);self.main_frame=main
         ttk.Label(main,text=APP_TITLE,style='Header.TLabel').pack(anchor='w',pady=(0,12))
         ttk.Label(main,text='Yupoo 类目链接（支持批量，每行一个 URL）').pack(anchor='w')
         row=ttk.Frame(main);row.pack(fill='x',pady=(4,10));self.url=tk.Text(row,height=3,wrap='word');self.url.pack(side='left',fill='x',expand=True);self.url.insert('1.0','https://he588123.x.yupoo.com/categories');ttk.Button(row,text='打开首个链接',command=self.open_link).pack(side='left',padx=(8,0))
@@ -636,9 +636,11 @@ class App:
                 except Exception as e:
                     self.log(f'账号 {account} 处理失败：{type(e).__name__}: {e}')
                     self.log(traceback.format_exc());summaries.append(f'{account}: 失败 - {type(e).__name__}: {e}')
-            status='完成' if summaries and all('失败' not in x for x in summaries) else '部分失败'
-            update_task(self.task_id,status=status,product_count=len(urls),output_path=self.run_dest,detail='\n\n'.join(summaries))
-            self.q.put(('done','\n\n'.join(summaries)))
+            failed=bool(summaries) and all('失败 -' in x for x in summaries)
+            status='失败' if failed else ('完成' if summaries and all('失败' not in x for x in summaries) else '部分失败')
+            detail='\n\n'.join(summaries)
+            update_task(self.task_id,status=status,product_count=len(urls),output_path=self.run_dest,detail=detail)
+            self.q.put(('error' if failed else 'done',detail))
         except Exception as e:
             update_task(self.task_id,status='失败',output_path=self.run_dest,detail=str(e)+'\n'+traceback.format_exc())
             self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
@@ -772,7 +774,12 @@ class App:
             while True:
                 kind,msg=self.q.get_nowait()
                 if kind=='log':self.logbox.configure(state='normal');self.logbox.insert('end',msg+'\n');self.logbox.see('end');self.logbox.configure(state='disabled')
-                elif kind=='done':self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False;messagebox.showinfo('处理完成',msg)
+                elif kind=='done':
+                    self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
+                    if self.embedded:
+                        self.log('处理完成。')
+                        if self.on_complete:self.on_complete(self.run_dest,msg)
+                    else:messagebox.showinfo('处理完成',msg)
                 elif kind=='sync_done':
                     self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
                     root,count,book_path=msg; self.log(f'回写完成：{count} 行。')

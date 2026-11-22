@@ -90,12 +90,13 @@ class Workbench(tk.Tk):
         ttk.Button(b,text="开始采集 / 导入",style="Accent.TButton",command=lambda:self.show("采集与导入")).pack(anchor="w",pady=(12,0))
 
     def build_collect(self,p):
-        nb=ttk.Notebook(p); nb.pack(fill="both",expand=True)
-        yup=ttk.Frame(nb,padding=18); cli=ttk.Frame(nb,padding=18); imp=ttk.Frame(nb,padding=18)
+        nb=ttk.Notebook(p); nb.pack(fill="both",expand=True);self.collect_notebook=nb
+        yup=ttk.Frame(nb,padding=18); cli=ttk.Frame(nb,padding=18); imp=ttk.Frame(nb,padding=18);self.yupoo_tab=yup
         nb.add(yup,text="又拍采集器"); nb.add(cli,text="1688 / OpenCLI"); nb.add(imp,text="Excel / 本地资料")
-        c=self._card(yup,"又拍链接","每行一个类目/相册链接。完成后自动归入产品复核清单；也可在 AI 助手中直接粘贴链接。")
-        self.yupoo_urls=tk.Text(c,height=4,wrap="word",font=("Microsoft YaHei UI",10)); self.yupoo_urls.pack(fill="x")
-        ttk.Button(c,text="采集又拍资料",style="Accent.TButton",command=self.start_yupoo).pack(anchor="e",pady=(10,0))
+        # Embed the complete Yupoo desktop-tool UI sourced from its app.py; do not
+        # replace it with a reduced link box or launch a second application window.
+        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete)
+        self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self.output))
         c=self._card(cli,"1688 链接采集","从 AI 助手粘贴链接，由模型识别采集意图；确认后调用本机 OpenCLIApp。此处保留手动执行入口。")
         self.cli_url=tk.StringVar(); ttk.Entry(c,textvariable=self.cli_url).pack(fill="x",pady=4)
         ttk.Button(c,text="让 AI 分析并采集",style="Accent.TButton",command=self.request_1688_via_ai).pack(anchor="e",pady=(8,0))
@@ -113,31 +114,22 @@ class Workbench(tk.Tk):
         ttk.Button(row,text="浏览…",command=choose).pack(side="right")
 
     def start_yupoo(self):
-        urls=self.yupoo_urls.get("1.0","end").strip(); output=str(self.output)
+        if "采集与导入" not in self.pages:self.show("采集与导入")
+        elif not hasattr(self,"yupoo_app"):self.show("采集与导入")
+        app=self.yupoo_app
+        self.collect_notebook.select(self.yupoo_tab)
+        urls=app.url.get("1.0","end").strip(); output=str(self.output)
         if not urls:return messagebox.showinfo(APP_NAME,"请粘贴 Yupoo 链接。")
-        task=create_task("download","Yupoo",urls,output); self.status.set("Yupoo 采集中…")
-        def work():
-            try:
-                engine=YupooProcessor.__new__(YupooProcessor); engine.run_url=urls; engine.run_dest=output; engine.run_flags=(False,False); engine.run_force=False; engine.task_id=task; engine.q=queue.Queue(); engine.run_job("download")
-                messages=[];errors=[];done=[]
-                while not engine.q.empty():
-                    kind,msg=engine.q.get(); messages.append(str(msg))
-                    if kind=="error":errors.append(str(msg))
-                    elif kind=="done":done.append(str(msg))
-                # The embedded worker owns task status; do not turn its caught failure into a false success.
-                all_failed=bool(done) and all(bool(re.search(r"(?m)^.+: 失败 -",text)) for text in done)
-                failed=bool(errors) or all_failed
-                if failed:
-                    detail="\n".join(errors or done)
-                    def show_yupoo_error(d=detail):
-                        self.status.set("又拍采集失败："+d.splitlines()[0])
-                        messagebox.showerror(APP_NAME,"又拍采集未完成：\n\n"+d[:5000]+"\n\n可在任务中心查看完整记录。")
-                    self.after(0,show_yupoo_error)
-                else:
-                    self.after(0,lambda:(self.status.set("又拍采集完成；正在整理相册到统一产品清单。"),self.load_import(Path(output),None)))
-            except Exception as e:
-                update_task(task,status="失败",output_path=output,detail=str(e)); self.after(0,lambda:self.status.set(f"又拍采集失败：{e}"))
-        threading.Thread(target=work,daemon=True).start()
+        app.dest.delete(0,"end");app.dest.insert(0,output)
+        self.status.set("又拍采集中…")
+        app.start_job("download")
+
+    def _yupoo_complete(self,output,summary):
+        self.status.set("又拍采集完成；正在整理相册到统一产品清单。")
+        try:self.load_import(Path(output),None)
+        except Exception as e:
+            self.status.set("又拍文件已下载，但未能建立复核清单。")
+            messagebox.showerror(APP_NAME,f"采集已完成，但导入复核清单失败：{e}\n\n采集记录：\n{summary}")
 
     def start_1688(self):
         url=self.cli_url.get().strip()
@@ -346,7 +338,12 @@ class Workbench(tk.Tk):
         if source=="1688/OpenCLI":
             self.cli_url.set(planned_url);self.start_1688();self._chat_line("系统","已确认，正在调用本机 OpenCLIApp。完成后产品会进入复核清单；状态见任务中心。")
         else:
-            self.yupoo_urls.delete("1.0","end");self.yupoo_urls.insert("1.0",planned_url);self.start_yupoo();self._chat_line("系统","已确认，正在采集又拍资料。状态见任务中心。")
+            self.start_yupoo_with_url(planned_url);self._chat_line("系统","已确认，正在使用嵌入的又拍采集器下载资料。状态见任务中心。")
+
+    def start_yupoo_with_url(self,url):
+        if "采集与导入" not in self.pages or not hasattr(self,"yupoo_app"):self.show("采集与导入")
+        app=self.yupoo_app;app.url.delete("1.0","end");app.url.insert("1.0",url)
+        self.start_yupoo()
 
     def _ai_result(self,result):
         reply=str(result.get("reply","整理完成。"));self._chat_line("助手",reply)
