@@ -201,6 +201,27 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
     product_code = str(values.get("product_code") or f"P-{date.today():%Y%m%d}-{uuid.uuid4().hex[:8].upper()}")
     product_id = str(values.get("product_id") or uuid.uuid4())
     output_root = output_root.resolve()
+    existing_manifest = source_root / "产品档案.json"
+    if existing_manifest.is_file():
+        try:
+            previous = json.loads(existing_manifest.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if previous.get("product_id") == product_id and previous.get("source_type") == "Yupoo":
+            # Yupoo products are already stored in the final archive layout.
+            # Review updates this canonical JSON in place instead of copying
+            # them through a legacy staging package.
+            for key in ("name", "category", "brand", "model", "sku", "supplier_name", "supplier_sku",
+                        "description", "colors", "sizes", "material", "unit", "currency", "unit_price",
+                        "moq", "carton_spec", "units_per_carton", "carton_quantity", "carton_volume_cbm",
+                        "gross_weight_kg_per_carton", "net_weight_kg_per_carton", "lead_time", "notes"):
+                previous[key] = str(values.get(key, "") or "").strip()
+            previous["field_sources"] = {**(previous.get("field_sources") or {}), **(values.get("field_sources") or {})}
+            previous["updated_at"] = __import__("datetime").datetime.now().astimezone().isoformat(timespec="seconds")
+            previous["missing_fields"] = missing_product_fields(previous)
+            previous["review_status"] = "needs_info" if previous["missing_fields"] else "ready_for_review"
+            existing_manifest.write_text(json.dumps(previous, ensure_ascii=False, indent=2), encoding="utf-8")
+            return source_root, previous
     if output_root == source_root or output_root.is_relative_to(source_root):
         raise ValueError("标准档案输出目录不能放在供应商源文件夹里面，以免将生成档案再次当作原始资料导入。")
     supplier_name = str(values.get("supplier_name", "")).strip()
@@ -220,8 +241,9 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
     gallery_dir = images_dir / "副图"
     videos_dir = destination / "视频"
     originals_dir = destination / "原始资料"
-    specs_dir = destination / "规格"
-    for path in (gallery_dir, videos_dir, originals_dir, specs_dir):
+    specs_dir = destination / "规格与包装"
+    qualifications_dir = destination / "资质与说明"
+    for path in (gallery_dir, videos_dir, originals_dir, specs_dir, qualifications_dir):
         path.mkdir(parents=True, exist_ok=True)
 
     image_manifest = []

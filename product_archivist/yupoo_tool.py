@@ -8,7 +8,6 @@ from urllib.parse import urljoin, urlparse, parse_qs
 from urllib.request import Request, urlopen
 import sys
 from ca_bundle import CA_PEM
-from source_records import record_source
 from task_center import create_task, update_task
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -732,9 +731,6 @@ class App:
                 a['expected_image_count']=len(imgs);a['image_count']=len(saved);a['images']=saved
                 qr_path=folder/'QR.png';qrcode.make(a['url']).save(qr_path);a['qr_path']=str(qr_path)
                 (folder/'info.json').write_text(json.dumps(a,ensure_ascii=False,indent=2),encoding='utf-8')
-                detail=read_product_detail(folder)
-                missing=[label for key,label in (('单价/price(RMB)','采购单价'),('箱规/Carton dimensions','箱规尺寸'),('单箱毛重/Gross weight kg','单箱毛重')) if not str(detail.get(key) or '').strip()]
-                record_source('Yupoo',account,a['title'],str(folder),a['url'],'待补资料' if missing else '待复核',missing)
                 self.log(f'  {len(saved)}/{len(imgs)} 张图片，封面 {Path(cover_path).name if cover_path else "缺失"}')
             # Collapse historical duplicate folders, preserving the richest product TXT.
             ids_now=set()

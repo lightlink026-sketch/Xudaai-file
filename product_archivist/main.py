@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import json, mimetypes, os, queue, re, threading, tkinter as tk, urllib.request, uuid
+import json, mimetypes, os, queue, re, shutil, threading, tkinter as tk, urllib.request, uuid
+from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -10,6 +11,7 @@ from opencli_adapter import download_1688
 from source_records import record_source
 from task_center import create_task, update_task, list_tasks, delete_tasks
 from yupoo_tool import App as YupooProcessor
+from yupoo_archive import standardize_yupoo_downloads
 
 APP_NAME = "Xudaai 产品档案工作台"
 BASE = Path.home() / "Documents" / "Xudaai产品档案"
@@ -96,7 +98,7 @@ class Workbench(tk.Tk):
         # Embed the complete Yupoo desktop-tool UI sourced from its app.py; do not
         # replace it with a reduced link box or launch a second application window.
         self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete)
-        self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self.output))
+        self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self._yupoo_staging_root()))
         c=self._card(cli,"1688 链接采集","从 AI 助手粘贴链接，由模型识别采集意图；确认后调用本机 OpenCLIApp。此处保留手动执行入口。")
         self.cli_url=tk.StringVar(); ttk.Entry(c,textvariable=self.cli_url).pack(fill="x",pady=4)
         ttk.Button(c,text="让 AI 分析并采集",style="Accent.TButton",command=self.request_1688_via_ai).pack(anchor="e",pady=(8,0))
@@ -118,18 +120,32 @@ class Workbench(tk.Tk):
         elif not hasattr(self,"yupoo_app"):self.show("采集与导入")
         app=self.yupoo_app
         self.collect_notebook.select(self.yupoo_tab)
-        urls=app.url.get("1.0","end").strip(); output=str(self.output)
+        urls=app.url.get("1.0","end").strip(); output=str(self._yupoo_staging_root())
         if not urls:return messagebox.showinfo(APP_NAME,"请粘贴 Yupoo 链接。")
+        Path(output).mkdir(parents=True,exist_ok=True)
         app.dest.delete(0,"end");app.dest.insert(0,output)
         self.status.set("又拍采集中…")
         app.start_job("download")
 
+    def _yupoo_staging_root(self):
+        local=Path(os.environ.get("LOCALAPPDATA",str(Path.home()/"AppData"/"Local")))
+        return local/"Xudaai产品档案工作台"/"又拍临时下载"
+
     def _yupoo_complete(self,output,summary):
-        self.status.set("又拍采集完成；正在整理相册到统一产品清单。")
-        try:self.load_import(Path(output),None)
+        self.status.set("又拍采集完成；正在转换为标准产品档案。")
+        try:
+            archives=standardize_yupoo_downloads(Path(output),self.output)
+            self.load_standard_archives(archives)
+            # Once canonical archives exist, the temporary source tree is no
+            # longer needed. Confirmed fields are held in 产品档案.json.
+            shutil.rmtree(output,ignore_errors=True)
+            task_id=getattr(self.yupoo_app,"task_id","")
+            if task_id:
+                update_task(task_id,status="待复核",product_count=len(archives),output_path=str(self.output),detail=f"已转换为标准档案：{len(archives)} 款产品。\n{summary}")
+            self.status.set(f"已转换 {len(archives)} 款又拍产品为标准档案，等待复核。")
         except Exception as e:
-            self.status.set("又拍文件已下载，但未能建立复核清单。")
-            messagebox.showerror(APP_NAME,f"采集已完成，但导入复核清单失败：{e}\n\n采集记录：\n{summary}")
+            self.status.set("又拍已下载，但标准档案转换失败；临时原始文件已保留。")
+            messagebox.showerror(APP_NAME,f"采集已完成，但标准档案转换失败：{e}\n\n临时文件：\n{output}\n\n采集记录：\n{summary}")
 
     def start_1688(self):
         url=self.cli_url.get().strip()
@@ -165,6 +181,9 @@ class Workbench(tk.Tk):
 
     def load_import(self,root,excel):
         root=Path(root).resolve(); files=[x for x in root.rglob("*") if x.is_file() and x.suffix.lower() in SUPPORTED_EXTS]
+        standard=[p.parent for p in root.rglob("产品档案.json")] if root.exists() else []
+        if standard:
+            self.load_standard_archives(standard);return
         workbook=excel or next((x for x in files if x.suffix.lower() in {".xlsx",".xlsm"}),None)
         rows=read_product_rows(workbook) if workbook else []
         candidate_dirs=[x for x in root.rglob("*") if x.is_dir() and any(y.is_file() and y.suffix.lower() in SUPPORTED_EXTS for y in x.iterdir())]
@@ -211,9 +230,27 @@ class Workbench(tk.Tk):
                     except Exception:pass
                 info=scan_product_folder(folder,max_files=30000)
                 self.batch.append({"info":info,"values":values,"name":name,"supplier_name":supplier,"source_url":source_url,"source_product_id":source_id,"source_label":str(folder),"main_image":info["images"][0].relative_to(folder).as_posix() if info["images"] else ""})
+        self._show_review_batch()
+
+    def load_standard_archives(self,folders):
+        self.batch=[]
+        for folder in folders:
+            folder=Path(folder).resolve();manifest_path=folder/"产品档案.json"
+            try:values=json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError,ValueError):continue
+            files=sorted(p for p in folder.rglob("*") if p.is_file() and p.name!="产品档案.json" and p.suffix.lower() in SUPPORTED_EXTS)
+            images=[p for p in files if p.suffix.lower() in IMAGE_EXTS]
+            videos=[p for p in files if p.suffix.lower() in VIDEO_EXTS]
+            info={"folder":str(folder),"folder_name":folder.name,"files":files,"images":images,"videos":videos,"source_documents":[],"source_text":""}
+            item_values={key:str(values.get(key,"")) for key,_ in FIELDS}
+            item_values.update(product_id=str(values.get("product_id") or ""),product_code=str(values.get("product_code") or ""),source_type=str(values.get("source_type") or ""),source_url=str(values.get("source_url") or ""),source_product_id=str(values.get("source_product_id") or ""),field_sources=values.get("field_sources") or {})
+            self.batch.append({"info":info,"values":item_values,"name":item_values.get("name") or folder.name,"supplier_name":item_values.get("supplier_name") or folder.parent.name,"source_url":item_values.get("source_url",""),"source_product_id":item_values.get("source_product_id",""),"source_label":str(folder),"main_image":next((str(entry.get("path","")) for entry in values.get("images",[]) if entry.get("role")=="main"),"")})
+        self._show_review_batch()
+
+    def _show_review_batch(self):
         for item in self.batch:
             values=item["values"]; missing=missing_product_fields(values)
-            record_source(values.get("source_type","本地资料"),values.get("supplier_name",""),values.get("name",""),item["info"]["folder"],"","待补资料" if missing else "待复核",missing)
+            record_source(values.get("source_type","本地资料"),values.get("supplier_name",""),values.get("name",""),item["info"]["folder"],values.get("source_url",""),"待补资料" if missing else "待复核",missing)
         old=self.pages.pop("产品复核",None)
         if old:old.destroy()
         self.show("产品复核")
@@ -249,6 +286,17 @@ class Workbench(tk.Tk):
         missing=missing_product_fields(values); item=self.batch[self.selected]
         if hasattr(self,"tree") and self.tree.exists(str(self.selected)):
             self.tree.item(str(self.selected),values=(values.get("supplier_name",""),values.get("name",""),"、".join(missing) or "无",item["source_label"]))
+        manifest_path=Path(item["info"]["folder"])/"产品档案.json"
+        if values.get("source_type")=="Yupoo" and manifest_path.is_file():
+            try:
+                manifest=json.loads(manifest_path.read_text(encoding="utf-8"))
+                for key,_ in FIELDS:manifest[key]=str(values.get(key,"") or "").strip()
+                manifest["field_sources"]={**(manifest.get("field_sources") or {}),**(values.get("field_sources") or {})}
+                manifest["missing_fields"]=missing;manifest["review_status"]="needs_info" if missing else "ready_for_review"
+                manifest["updated_at"]=datetime.now().astimezone().isoformat(timespec="seconds")
+                manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2),encoding="utf-8")
+            except (OSError,ValueError) as e:
+                if not silent:messagebox.showerror(APP_NAME,f"产品字段暂未写入档案文件：{e}")
         if not silent:self.status.set("产品字段已保存到当前批次。")
 
     def build_upload(self,p):
