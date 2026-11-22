@@ -17,7 +17,7 @@ from pypdf import PdfReader
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac"}
-DOC_EXTS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv", ".json"}
+DOC_EXTS = {".pdf", ".docx", ".xlsx", ".xlsm", ".pptx", ".txt", ".md", ".csv", ".json"}
 SUPPORTED_EXTS = IMAGE_EXTS | VIDEO_EXTS | DOC_EXTS
 
 
@@ -44,8 +44,8 @@ def read_text(path: Path, max_chars: int = 30000) -> str:
                     rows = list(csv.reader(stream))[:300]
                 return "\n".join(" | ".join(cell.strip() for cell in row[:30]) for row in rows)[:max_chars]
             return path.read_text(encoding="utf-8-sig", errors="replace")[:max_chars]
-        if ext == ".xlsx":
-            workbook = load_workbook(path, read_only=True, data_only=True)
+        if ext in {".xlsx", ".xlsm"}:
+            workbook = load_workbook(path, read_only=True, data_only=True, keep_vba=ext == ".xlsm")
             lines = []
             for sheet in workbook.worksheets[:12]:
                 lines.append(f"[工作表: {sheet.title}]")
@@ -83,6 +83,63 @@ def read_text(path: Path, max_chars: int = 30000) -> str:
     return ""
 
 
+PRODUCT_COLUMN_ALIASES = {
+    "name": {"产品名称", "产品名", "品名", "商品名称", "商品名", "款名", "product name", "product", "name"},
+    "supplier_name": {"供应商", "供应商名称", "供货商", "厂家", "供应厂家", "supplier", "supplier name", "vendor"},
+    "brand": {"品牌", "brand"}, "category": {"产品分类", "类别", "分类", "category"},
+    "model": {"产品型号", "型号", "model"}, "sku": {"sku", "自有sku", "产品sku", "货号"},
+    "supplier_sku": {"供应商型号", "供应商sku", "供应商货号", "工厂货号", "supplier sku"},
+    "description": {"产品描述", "描述", "卖点", "description"}, "material": {"材质", "材料", "material"},
+    "colors": {"颜色", "颜色/变体", "颜色变体", "color"}, "sizes": {"尺码", "尺寸", "规格", "size"},
+    "currency": {"币种", "货币", "currency"}, "unit_price": {"采购单价", "单价", "价格", "批发价", "price"},
+    "moq": {"moq", "起订量", "最小起订量", "起订"}, "unit": {"单位", "销售单位", "unit"},
+    "carton_spec": {"箱规", "外箱尺寸", "包装尺寸", "carton spec"},
+    "units_per_carton": {"单箱装量", "每箱数量", "装箱数", "pcs/carton"},
+    "carton_volume_cbm": {"单箱体积", "体积cbm", "cbm/ctn"},
+    "gross_weight_kg_per_carton": {"单箱毛重", "毛重/箱", "gross weight"},
+    "net_weight_kg_per_carton": {"单箱净重", "净重/箱", "net weight"},
+}
+
+
+def read_product_rows(path: Path) -> list[dict[str, Any]]:
+    """Read clearly tabular multi-product sheets using recognizable headers."""
+    path = path.resolve()
+    if path.suffix.lower() not in {".xlsx", ".xlsm"}:
+        return []
+    workbook = load_workbook(path, read_only=True, data_only=True, keep_vba=path.suffix.lower() == ".xlsm")
+    found: list[dict[str, Any]] = []
+    alias_to_key = {alias.casefold(): key for key, aliases in PRODUCT_COLUMN_ALIASES.items() for alias in aliases}
+    try:
+        for sheet in workbook.worksheets:
+            header_row = None
+            mapped: dict[int, str] = {}
+            last_supplier = ""
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=1, max_row=15, values_only=True), start=1):
+                normalized = [re.sub(r"\s+", " ", str(value or "").strip()).casefold() for value in row]
+                current = {col: alias_to_key[value] for col, value in enumerate(normalized) if value in alias_to_key}
+                if "name" in current:
+                    header_row, mapped = row_idx, current
+                    break
+            if header_row is None:
+                continue
+            for row_idx, row in enumerate(sheet.iter_rows(min_row=header_row + 1, values_only=True), start=header_row + 1):
+                values = {key: str(row[col]).strip() for col, key in mapped.items() if col < len(row) and row[col] is not None and str(row[col]).strip()}
+                if not values.get("name"):
+                    continue
+                values["source_row"] = f"{sheet.title}!{row_idx}"
+                values["source_file"] = path.name
+                last_supplier = values.get("supplier_name", last_supplier)
+                values["supplier_name"] = last_supplier or "未指定供应商"
+                found.append(values)
+                if len(found) >= 1000:
+                    break
+            if len(found) >= 1000:
+                break
+    finally:
+        workbook.close()
+    return found
+
+
 def scan_product_folder(folder: Path, extra_excel: Path | None = None) -> dict[str, Any]:
     folder = folder.resolve()
     if not folder.is_dir():
@@ -90,7 +147,8 @@ def scan_product_folder(folder: Path, extra_excel: Path | None = None) -> dict[s
     files = sorted(path for path in folder.rglob("*") if path.is_file() and not path.is_symlink() and path.suffix.lower() in SUPPORTED_EXTS)
     if len(files) > 500:
         raise ValueError("一个产品目录最多处理 500 个受支持文件。")
-    if not files:
+    has_external_excel = bool(extra_excel and extra_excel.is_file() and extra_excel.suffix.lower() in {".xlsx", ".xlsm"})
+    if not files and not has_external_excel:
         raise ValueError("该目录中没有支持的图片、视频或文档。")
     texts = []
     sources = []
@@ -132,7 +190,9 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
     output_root = output_root.resolve()
     if output_root == source_root or output_root.is_relative_to(source_root):
         raise ValueError("标准档案输出目录不能放在供应商源文件夹里面，以免将生成档案再次当作原始资料导入。")
-    destination = output_root / f"{product_code}-{safe_stem(product_name)}"
+    supplier_name = str(values.get("supplier_name", "")).strip()
+    supplier_root = output_root / safe_stem(supplier_name) if supplier_name else output_root
+    destination = supplier_root / f"{product_code}-{safe_stem(product_name)}"
     if destination.exists():
         raise FileExistsError(f"输出目录已存在：{destination}")
     images_dir = destination / "图片"
