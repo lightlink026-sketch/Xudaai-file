@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from core import IMAGE_EXTS, SUPPORTED_EXTS, make_product_package, read_product_rows, scan_product_folder
+from core import DOC_EXTS, IMAGE_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, read_product_rows, read_text, scan_product_folder
 
 APP_TITLE = "Xudaai 产品资料整理工具"
 CONFIG_PATH = Path.home() / ".xudaai-product-importer.json"
@@ -100,8 +100,9 @@ class ProductImporter(tk.Tk):
         actions = ttk.Frame(batch_frame)
         actions.pack(fill="x", pady=(0, 5))
         ttk.Button(actions, text="添加产品文件夹", command=self._add_product_folder).pack(side="left")
-        ttk.Button(actions, text="指定资料给所选产品", command=self._assign_product_folder).pack(side="left", padx=6)
-        ttk.Button(actions, text="移除所选产品", command=self._remove_batch_product).pack(side="left")
+        ttk.Button(actions, text="指定文件夹", command=self._assign_product_folder).pack(side="left", padx=5)
+        ttk.Button(actions, text="指定文件", command=self._assign_product_files).pack(side="left")
+        ttk.Button(actions, text="移除产品", command=self._remove_batch_product).pack(side="left", padx=5)
         self.batch_count_var = tk.StringVar(value="尚未扫描")
         ttk.Label(actions, textvariable=self.batch_count_var).pack(side="right")
         batch_columns = ("supplier", "name", "source", "status")
@@ -423,7 +424,10 @@ class ProductImporter(tk.Tk):
         rows = read_product_rows(workbook) if workbook else []
         folders = self._discover_folder_products(root)
         batch: list[dict[str, Any]] = []
-        if len(folders) > 1:
+        # When the workbook has multiple product rows, treat each row as an
+        # authoritative product even if its matching media directory is missing.
+        # Otherwise the folder-first branch silently dropped Excel-only products.
+        if len(folders) > 1 and len(rows) <= 1:
             for folder, supplier in folders:
                 info = scan_product_folder(folder)
                 match = next((row for row in rows if str(row.get("name", "")).casefold() in folder.name.casefold() or folder.name.casefold() in str(row.get("name", "")).casefold()), {})
@@ -433,25 +437,55 @@ class ProductImporter(tk.Tk):
                 if match:
                     values["field_sources"] = {key: f"{workbook.name if workbook else 'Excel'} · {match.get('source_row', '')}" for key in values if key != "field_sources"}
                 batch.append({"supplier_name": values["supplier_name"], "name": values["name"], "source_label": str(folder), "info": info, "excel_source_path": workbook if match else None, "values": values, "main_image": info["images"][0].relative_to(folder).as_posix() if info["images"] else ""})
-        elif len(rows) > 1:
+        elif rows:
             for row in rows:
                 name = str(row.get("name", "未命名产品"))
                 tokens = [name, str(row.get("sku", "")), str(row.get("supplier_sku", ""))]
                 norm = lambda value: re.sub(r"[^\w\u4e00-\u9fff]+", "", str(value)).casefold()
-                matched = [path for path in root_info["files"] if workbook is None or path.resolve() != workbook.resolve()]
-                # Match product media and documents by product name/SKU in file or folder names.
-                matched = [path for path in matched if any(token and norm(token) in norm(path.relative_to(root).as_posix()) for token in tokens)]
-                files = list(matched)
-                workbook_inside = workbook is not None and workbook.resolve().is_relative_to(root)
-                if workbook_inside and workbook not in files:
-                    files.append(workbook)
-                if not files and workbook_inside:
-                    files = [workbook]
-                info = {**root_info, "files": files, "images": [path for path in files if path.suffix.lower() in IMAGE_EXTS], "videos": [path for path in files if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac"}], "source_documents": [str(row.get("source_row", workbook.name if workbook else "Excel"))], "source_text": json.dumps(row, ensure_ascii=False)}
+                product_tokens = [norm(token) for token in tokens if norm(token)]
+                product_folders = [
+                    (folder, supplier)
+                    for folder, supplier in folders
+                    if any(token in norm(folder.relative_to(root).as_posix()) for token in product_tokens)
+                ]
+                row_supplier = norm(row.get("supplier_name", ""))
+                if row_supplier:
+                    supplier_matches = [entry for entry in product_folders if row_supplier in norm(entry[1]) or row_supplier in norm(entry[0].relative_to(root).as_posix())]
+                    if supplier_matches:
+                        product_folders = supplier_matches
+
+                if product_folders:
+                    product_folder, discovered_supplier = product_folders[0]
+                    info = scan_product_folder(product_folder)
+                    supplier_default = discovered_supplier
+                else:
+                    matched = [
+                        path for path in root_info["files"]
+                        if (workbook is None or path.resolve() != workbook.resolve())
+                        and any(token in norm(path.relative_to(root).as_posix()) for token in product_tokens)
+                    ]
+                    files = list(matched)
+                    info = {
+                        **root_info,
+                        "files": files,
+                        "images": [path for path in files if path.suffix.lower() in IMAGE_EXTS],
+                        "videos": [path for path in files if path.suffix.lower() in VIDEO_EXTS],
+                        "source_documents": [path.relative_to(root).as_posix() for path in files if path.suffix.lower() in DOC_EXTS],
+                        "source_text": "",
+                    }
+                    supplier_default = "未指定供应商"
+                    for path in files:
+                        if path.suffix.lower() in DOC_EXTS:
+                            info["source_text"] += f"\n===== 来源文件: {path.relative_to(root).as_posix()} =====\n{read_text(path, 12000)}"
+                # Keep the workbook row as evidence, without exposing all other
+                # suppliers' and products' rows to this product's AI context.
+                row_text = json.dumps(row, ensure_ascii=False)
+                info["source_text"] = f"{info.get('source_text', '')}\n===== Excel 行 {row.get('source_row', '')} =====\n{row_text}"[:70000]
                 values = {key: str(row.get(key, "")) for key, _, _ in FIELDS if row.get(key) is not None}
-                values["supplier_name"] = str(row.get("supplier_name", "未指定供应商"))
+                values["supplier_name"] = str(row.get("supplier_name") or supplier_default)
                 values["field_sources"] = {key: f"{workbook.name if workbook else 'Excel'} · {row.get('source_row', '')}" for key in values if key != "field_sources"}
-                batch.append({"supplier_name": values["supplier_name"], "name": name, "source_label": f"{row.get('source_file', workbook.name if workbook else 'Excel')} · {row.get('source_row', '')}", "info": info, "excel_source_path": workbook, "values": values, "main_image": info["images"][0].relative_to(root).as_posix() if info["images"] else ""})
+                folder_name = Path(info["folder"]).name
+                batch.append({"supplier_name": values["supplier_name"], "name": name, "source_label": f"{folder_name} · {row.get('source_file', workbook.name if workbook else 'Excel')} · {row.get('source_row', '')}", "info": info, "excel_source_path": workbook, "values": values, "main_image": info["images"][0].relative_to(Path(info["folder"])).as_posix() if info["images"] else ""})
         else:
             info = scan_product_folder(folders[0][0], extra) if folders else root_info
             supplier = folders[0][1] if folders else root.name
@@ -579,6 +613,40 @@ class ProductImporter(tk.Tk):
         item["info"] = info
         item["source_label"] = str(folder)
         item["main_image"] = info["images"][0].relative_to(Path(info["folder"])).as_posix() if info["images"] else ""
+        self._load_batch_product(self.active_product_index)
+
+    def _assign_product_files(self) -> None:
+        if self.active_product_index is None:
+            messagebox.showinfo(APP_TITLE, "请先选择要指定资料的产品。")
+            return
+        item = self.batch_products[self.active_product_index]
+        initial = str(item.get("info", {}).get("folder", Path.home()))
+        paths = filedialog.askopenfilenames(
+            title="选择只属于当前产品的图片、视频或产品资料",
+            initialdir=initial,
+            filetypes=[("产品图片/视频/资料", "*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff *.gif *.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mp3 *.wav *.m4a *.aac *.pdf *.docx *.xlsx *.xlsm *.pptx *.txt *.md *.csv *.json"), ("所有文件", "*.*")],
+        )
+        if not paths:
+            return
+        files = [Path(path).resolve() for path in paths]
+        if len(files) > 250:
+            messagebox.showerror(APP_TITLE, "每个产品最多指定 250 个文件。")
+            return
+        root = Path(os.path.commonpath([str(path.parent) for path in files])).resolve()
+        supported = [path for path in files if path.suffix.lower() in SUPPORTED_EXTS]
+        if len(supported) != len(files):
+            messagebox.showerror(APP_TITLE, "所选内容包含不支持的文件类型，请重新选择。")
+            return
+        images = [path for path in files if path.suffix.lower() in IMAGE_EXTS]
+        videos = [path for path in files if path.suffix.lower() in VIDEO_EXTS]
+        documents = [path for path in files if path.suffix.lower() in DOC_EXTS]
+        source_text = "\n".join(f"\n===== 来源文件: {path.relative_to(root).as_posix()} =====\n{read_text(path, 18000)}" for path in documents)
+        info = {"folder": str(root), "folder_name": root.name, "files": files, "images": images, "videos": videos, "source_documents": [path.relative_to(root).as_posix() for path in documents], "source_text": source_text[:70000]}
+        self._save_active_product()
+        item = self.batch_products[self.active_product_index]
+        item["info"] = info
+        item["source_label"] = f"{root} · 已指定 {len(files)} 个文件"
+        item["main_image"] = images[0].relative_to(root).as_posix() if images else ""
         self._load_batch_product(self.active_product_index)
 
     def _remove_batch_product(self) -> None:
