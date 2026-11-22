@@ -140,13 +140,15 @@ def read_product_rows(path: Path) -> list[dict[str, Any]]:
     return found
 
 
-def scan_product_folder(folder: Path, extra_excel: Path | None = None) -> dict[str, Any]:
+def scan_product_folder(folder: Path, extra_excel: Path | None = None, max_files: int = 500) -> dict[str, Any]:
     folder = folder.resolve()
     if not folder.is_dir():
         raise ValueError("请选择一个产品资料文件夹。")
+    if not isinstance(max_files, int) or not 1 <= max_files <= 10000:
+        raise ValueError("单个产品目录扫描上限必须在 1–10000 个文件之间。")
     files = sorted(path for path in folder.rglob("*") if path.is_file() and not path.is_symlink() and path.suffix.lower() in SUPPORTED_EXTS)
-    if len(files) > 500:
-        raise ValueError("一个产品目录最多处理 500 个受支持文件。")
+    if len(files) > max_files:
+        raise ValueError(f"该扫描目录包含 {len(files)} 个受支持文件，超过当前上限 {max_files}。请调整上限或移出无关文件。")
     has_external_excel = bool(extra_excel and extra_excel.is_file() and extra_excel.suffix.lower() in {".xlsx", ".xlsm"})
     if not files and not has_external_excel:
         raise ValueError("该目录中没有支持的图片、视频或文档。")

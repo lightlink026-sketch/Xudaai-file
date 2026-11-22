@@ -81,18 +81,41 @@ class ProductImporter(tk.Tk):
         self.ai_url_var = tk.StringVar(value=self.config_data.get("ai_url", "https://api.siliconflow.cn/v1"))
         self.ai_model_var = tk.StringVar(value=self.config_data.get("ai_model", ""))
         self.ai_key_var = tk.StringVar()
+        self.max_files_var = tk.StringVar(value=str(self.config_data.get("max_files_per_product", 500)))
 
         workflow = ttk.Notebook(outer)
         workflow.pack(fill="both", expand=True, pady=4)
-        product_page = ttk.Frame(workflow, padding=10)
-        workflow.add(product_page, text="1 资料与产品信息")
+        product_page_host = ttk.Frame(workflow)
+        workflow.add(product_page_host, text="1 资料与产品信息")
+        product_canvas = tk.Canvas(product_page_host, highlightthickness=0, borderwidth=0)
+        product_scroll = ttk.Scrollbar(product_page_host, orient="vertical", command=product_canvas.yview)
+        product_canvas.configure(yscrollcommand=product_scroll.set)
+        product_scroll.pack(side="right", fill="y")
+        product_canvas.pack(side="left", fill="both", expand=True)
+        product_page = ttk.Frame(product_canvas, padding=10)
+        product_window = product_canvas.create_window((0, 0), window=product_page, anchor="nw")
+        self.workflow = workflow
+        self.product_page_host = product_page_host
+
+        def update_product_scroll(_event=None) -> None:
+            product_canvas.configure(scrollregion=product_canvas.bbox("all"))
+
+        def resize_product_content(event) -> None:
+            product_canvas.itemconfigure(product_window, width=event.width)
+
+        product_page.bind("<Configure>", update_product_scroll)
+        product_canvas.bind("<Configure>", resize_product_content)
+        self.product_canvas = product_canvas
 
         paths = ttk.LabelFrame(product_page, text="选择资料批次", padding=10)
         paths.pack(fill="x", pady=(0, 8))
         self._path_row(paths, 0, "供应商/产品资料", self.source_var, self._choose_source, "选择文件夹")
         self._path_row(paths, 1, "补充 Excel（可选）", self.excel_var, self._choose_excel, "选择 Excel")
+        ttk.Label(paths, text="目录扫描文件上限").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Spinbox(paths, from_=1, to=10000, textvariable=self.max_files_var, width=9).grid(row=2, column=1, sticky="w", pady=(8, 0))
         self.scan_button = ttk.Button(paths, text="扫描并读取资料", command=self._scan)
         self.scan_button.grid(row=2, column=2, sticky="e", pady=(8, 0))
+        ttk.Label(paths, text="默认 500，可设 1–10000。资料库单个产品包仍限制 250 个文件。", foreground="#68736b").grid(row=3, column=0, columnspan=3, sticky="w", pady=(5, 0))
         paths.columnconfigure(1, weight=1)
 
         batch_frame = ttk.LabelFrame(product_page, text="本批产品清单：一个供应商可有多款产品；一个批次也可包含多个供应商", padding=8)
@@ -174,6 +197,24 @@ class ProductImporter(tk.Tk):
         ttk.Label(output_page, text="文件夹和 Excel 只在本机扫描；上传前可逐个复核供应商、产品字段和主图。", foreground="#68736b", wraplength=980).pack(anchor="w", pady=(12, 0))
         self.status_var = tk.StringVar(value="准备就绪。先扫描一个批次，再整理供应商和产品，最后生成并上传。")
         ttk.Label(outer, textvariable=self.status_var, wraplength=1050).pack(anchor="w", pady=(9, 0))
+        self.bind_all("<MouseWheel>", self._product_mousewheel)
+        self.bind_all("<Button-4>", self._product_mousewheel)
+        self.bind_all("<Button-5>", self._product_mousewheel)
+
+    def _product_mousewheel(self, event) -> str:
+        if self.workflow.select() != str(self.product_page_host):
+            return ""
+        target = self.winfo_containing(event.x_root, event.y_root)
+        if isinstance(target, (tk.Text, ttk.Treeview, ttk.Combobox, ttk.Scrollbar, ttk.Entry)):
+            return ""
+        if getattr(event, "num", None) == 4:
+            direction = -1
+        elif getattr(event, "num", None) == 5:
+            direction = 1
+        else:
+            direction = -1 if event.delta > 0 else 1
+        self.product_canvas.yview_scroll(direction, "units")
+        return "break"
 
     def _build_ai_chat(self, notebook: ttk.Notebook) -> None:
         pane = ttk.Frame(notebook, padding=12)
@@ -368,6 +409,14 @@ class ProductImporter(tk.Tk):
     def _scan(self) -> None:
         source_value = self.source_var.get().strip()
         extra = Path(self.excel_var.get()) if self.excel_var.get().strip() else None
+        try:
+            max_files = int(self.max_files_var.get().strip())
+        except ValueError:
+            messagebox.showinfo(APP_TITLE, "请输入有效的目录文件扫描上限（1–10000）。")
+            return
+        if not 1 <= max_files <= 10000:
+            messagebox.showinfo(APP_TITLE, "目录文件扫描上限需在 1–10000 之间。")
+            return
         if not source_value and not extra:
             messagebox.showinfo(APP_TITLE, "请选择供应商/产品文件夹，或至少选择一个包含产品清单的 Excel。")
             return
@@ -385,12 +434,13 @@ class ProductImporter(tk.Tk):
         self.scan_button.configure(state="disabled")
         self.batch_count_var.set("正在扫描")
         self.status_var.set("正在本地扫描文件夹和 Excel，识别供应商与产品…")
-        threading.Thread(target=self._run_scan, args=(source, extra), daemon=True).start()
+        self._save_config()
+        threading.Thread(target=self._run_scan, args=(source, extra, max_files), daemon=True).start()
 
-    def _run_scan(self, source: Path, extra: Path | None) -> None:
+    def _run_scan(self, source: Path, extra: Path | None, max_files: int) -> None:
         try:
-            root_info = scan_product_folder(source, extra)
-            batch = self._discover_batch_products(root_info, extra)
+            root_info = scan_product_folder(source, extra, max_files)
+            batch = self._discover_batch_products(root_info, extra, max_files)
             self.after(0, lambda: self._scan_finished(batch, ""))
         except Exception as exc:
             error_text = str(exc)
@@ -418,7 +468,7 @@ class ProductImporter(tk.Tk):
             candidates.append((root, ""))
         return candidates[:200]
 
-    def _discover_batch_products(self, root_info: dict[str, Any], extra: Path | None) -> list[dict[str, Any]]:
+    def _discover_batch_products(self, root_info: dict[str, Any], extra: Path | None, max_files: int) -> list[dict[str, Any]]:
         root = Path(root_info["folder"])
         workbook = extra or next((path for path in root_info["files"] if path.suffix.lower() in {".xlsx", ".xlsm"}), None)
         rows = read_product_rows(workbook) if workbook else []
@@ -429,7 +479,7 @@ class ProductImporter(tk.Tk):
         # Otherwise the folder-first branch silently dropped Excel-only products.
         if len(folders) > 1 and len(rows) <= 1:
             for folder, supplier in folders:
-                info = scan_product_folder(folder)
+                info = scan_product_folder(folder, max_files=max_files)
                 match = next((row for row in rows if str(row.get("name", "")).casefold() in folder.name.casefold() or folder.name.casefold() in str(row.get("name", "")).casefold()), {})
                 values = {key: str(match.get(key, "")) for key, _, _ in FIELDS if match.get(key) is not None}
                 values["supplier_name"] = str(match.get("supplier_name") or supplier)
@@ -456,7 +506,7 @@ class ProductImporter(tk.Tk):
 
                 if product_folders:
                     product_folder, discovered_supplier = product_folders[0]
-                    info = scan_product_folder(product_folder)
+                    info = scan_product_folder(product_folder, max_files=max_files)
                     supplier_default = discovered_supplier
                 else:
                     matched = [
@@ -487,7 +537,7 @@ class ProductImporter(tk.Tk):
                 folder_name = Path(info["folder"]).name
                 batch.append({"supplier_name": values["supplier_name"], "name": name, "source_label": f"{folder_name} · {row.get('source_file', workbook.name if workbook else 'Excel')} · {row.get('source_row', '')}", "info": info, "excel_source_path": workbook, "values": values, "main_image": info["images"][0].relative_to(Path(info["folder"])).as_posix() if info["images"] else ""})
         else:
-            info = scan_product_folder(folders[0][0], extra) if folders else root_info
+            info = scan_product_folder(folders[0][0], extra, max_files) if folders else root_info
             supplier = folders[0][1] if folders else root.name
             values = {"name": info["folder_name"], "supplier_name": supplier}
             if rows:
@@ -581,7 +631,7 @@ class ProductImporter(tk.Tk):
         if not folder:
             return
         try:
-            info = scan_product_folder(Path(folder))
+            info = scan_product_folder(Path(folder), max_files=self._get_max_files())
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -604,7 +654,7 @@ class ProductImporter(tk.Tk):
         if not folder:
             return
         try:
-            info = scan_product_folder(Path(folder))
+            info = scan_product_folder(Path(folder), max_files=self._get_max_files())
         except Exception as exc:
             messagebox.showerror(APP_TITLE, str(exc))
             return
@@ -772,8 +822,17 @@ class ProductImporter(tk.Tk):
             messagebox.showerror(APP_TITLE, str(exc))
 
     def _save_config(self) -> None:
-        config = {"output_dir": self.output_var.get().strip(), "server_url": self.server_var.get().strip(), "server_user": self.user_var.get().strip(), "ai_url": self.ai_url_var.get().strip(), "ai_model": self.ai_model_var.get().strip()}
+        config = {"output_dir": self.output_var.get().strip(), "server_url": self.server_var.get().strip(), "server_user": self.user_var.get().strip(), "ai_url": self.ai_url_var.get().strip(), "ai_model": self.ai_model_var.get().strip(), "max_files_per_product": self.max_files_var.get().strip()}
         CONFIG_PATH.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _get_max_files(self) -> int:
+        try:
+            value = int(self.max_files_var.get().strip())
+        except ValueError as exc:
+            raise ValueError("请输入有效的目录文件扫描上限（1–10000）。") from exc
+        if not 1 <= value <= 10000:
+            raise ValueError("目录文件扫描上限需在 1–10000 之间。")
+        return value
 
     def _upload(self) -> None:
         if not self.generated_packages:
