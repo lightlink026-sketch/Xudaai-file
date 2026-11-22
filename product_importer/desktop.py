@@ -8,6 +8,7 @@ import threading
 import tkinter as tk
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -17,6 +18,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 
 from core import DOC_EXTS, IMAGE_EXTS, REQUIRED_PRODUCT_FIELDS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, missing_product_fields, read_product_rows, read_text, scan_product_folder
+from source_records import delete_source_records, query_sources, record_source
 from yupoo_tool import App as YupooApp
 
 APP_TITLE = "Xudaai 产品资料整理工具"
@@ -68,9 +70,20 @@ class ProductImporter(tk.Tk):
 
     def _build(self) -> None:
         menubar = tk.Menu(self)
-        tools_menu = tk.Menu(menubar, tearoff=False)
-        tools_menu.add_command(label="Yupoo 相册下载 / Excel / PDF", command=self._open_yupoo_tool)
-        menubar.add_cascade(label="工具", menu=tools_menu)
+        source_menu = tk.Menu(menubar, tearoff=False)
+        source_menu.add_command(label="Yupoo 链接下载 / Excel / PDF", command=self._open_yupoo_tool)
+        source_menu.add_command(label="导入 1688 / OpenCLI Excel", command=self._choose_excel)
+        source_menu.add_command(label="导入人工整理资料文件夹", command=self._choose_source)
+        menubar.add_cascade(label="采集与导入", menu=source_menu)
+        records_menu = tk.Menu(menubar, tearoff=False)
+        records_menu.add_command(label="查询 / 删除下载与导入记录…", command=self._open_source_records)
+        menubar.add_cascade(label="资料记录", menu=records_menu)
+        ai_menu = tk.Menu(menubar, tearoff=False)
+        ai_menu.add_command(label="AI 对话与模型配置", command=self._show_ai_page)
+        menubar.add_cascade(label="AI 助手", menu=ai_menu)
+        template_menu = tk.Menu(menubar, tearoff=False)
+        template_menu.add_command(label="生成标准产品资料模板", command=self._create_folder_template)
+        menubar.add_cascade(label="模板", menu=template_menu)
         self.configure(menu=menubar)
 
         outer = ttk.Frame(self, padding=14)
@@ -78,8 +91,7 @@ class ProductImporter(tk.Tk):
         header = ttk.Frame(outer)
         header.pack(fill="x")
         ttk.Label(header, text="本地产品资料整理", font=("Microsoft YaHei UI", 18, "bold")).pack(side="left", anchor="w")
-        ttk.Button(header, text="打开 Yupoo 下载 / Excel / PDF 工具", command=self._open_yupoo_tool).pack(side="right", padx=4)
-        ttk.Label(outer, text="按批次整理供应商和多个产品：导入资料、AI 辅助归档、人工确认，再统一生成并上传。", wraplength=1050).pack(anchor="w", pady=(4, 12))
+        ttk.Label(outer, text="顶部菜单分别管理采集导入、下载记录、AI 配置和模板；本页用于核对产品资料，完成后统一生成并上传。", wraplength=1050).pack(anchor="w", pady=(4, 12))
 
         self.source_var = tk.StringVar()
         self.excel_var = tk.StringVar()
@@ -98,7 +110,7 @@ class ProductImporter(tk.Tk):
         workflow = ttk.Notebook(outer)
         workflow.pack(fill="both", expand=True, pady=4)
         product_page_host = ttk.Frame(workflow)
-        workflow.add(product_page_host, text="1 资料与产品信息")
+        workflow.add(product_page_host, text="1 资料导入与产品整理")
         product_canvas = tk.Canvas(product_page_host, highlightthickness=0, borderwidth=0)
         product_scroll = ttk.Scrollbar(product_page_host, orient="vertical", command=product_canvas.yview)
         product_canvas.configure(yscrollcommand=product_scroll.set)
@@ -124,8 +136,7 @@ class ProductImporter(tk.Tk):
         ttk.Label(paths, text="又拍下载目录、1688/OpenCLI 导出的 Excel、人工整理资料均可导入；可组合选择。", wraplength=980).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, 6))
         self._path_row(paths, 1, "人工/又拍资料目录", self.source_var, self._choose_source, "选择文件夹")
         self._path_row(paths, 2, "1688/OpenCLI 或补充 Excel", self.excel_var, self._choose_excel, "选择 Excel")
-        ttk.Button(paths, text="又拍链接下载", command=self._open_yupoo_tool).grid(row=3, column=0, sticky="w", pady=(3, 0))
-        ttk.Label(paths, text="下载后选择供应商目录；Excel 按供应商和产品行建立批次。", foreground="#68736b").grid(row=3, column=1, columnspan=2, sticky="w", pady=(3, 0))
+        ttk.Label(paths, text="又拍下载请从顶部‘采集与导入’菜单进入；1688 Excel 和人工目录也可从菜单或此处选择。", foreground="#68736b").grid(row=3, column=0, columnspan=3, sticky="w", pady=(3, 0))
         ttk.Label(paths, text="目录扫描文件上限").grid(row=4, column=0, sticky="w", pady=(8, 0))
         ttk.Spinbox(paths, from_=1, to=30000, textvariable=self.max_files_var, width=9).grid(row=4, column=1, sticky="w", pady=(8, 0))
         self.scan_button = ttk.Button(paths, text="扫描并读取资料", command=self._scan)
@@ -191,9 +202,8 @@ class ProductImporter(tk.Tk):
         self._build_ai_chat(workflow)
 
         output_page = ttk.Frame(workflow, padding=14)
-        workflow.add(output_page, text="3 生成与上传")
+        workflow.add(output_page, text="3 标准档案与同步")
         ttk.Label(output_page, text="批次复核完成后，在此生成各产品的标准档案并上传到现有资料库。", wraplength=980).pack(anchor="w", pady=(0, 12))
-        ttk.Button(output_page, text="生成统一产品资料模板（文件夹 + Excel）", command=self._create_folder_template).pack(anchor="w", pady=(0, 10))
         output_path = ttk.LabelFrame(output_page, text="标准档案保存位置", padding=9)
         output_path.pack(fill="x", pady=(0, 10))
         self._path_row(output_path, 0, "输出位置", self.output_var, self._choose_output, "选择位置")
@@ -223,6 +233,125 @@ class ProductImporter(tk.Tk):
             YupooApp(window)
         except Exception as exc:
             messagebox.showerror(APP_TITLE, f"打开 Yupoo 功能窗口失败：\n{exc}")
+
+    def _show_ai_page(self) -> None:
+        if hasattr(self, "ai_page"):
+            self.workflow.select(self.ai_page)
+
+    def _open_source_records(self) -> None:
+        self._save_active_product()
+        window = tk.Toplevel(self)
+        window.title("下载与导入记录")
+        window.geometry("1120x620")
+        window.minsize(820, 440)
+        frame = ttk.Frame(window, padding=12)
+        frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="下载与导入记录", font=("Microsoft YaHei UI", 15, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="记录可搜索和分页。‘仅删记录’不动原始文件；删除又拍文件时，只会清理校验为 Yupoo 相册的产品目录。", wraplength=1000).pack(anchor="w", pady=(4, 10))
+        toolbar = ttk.Frame(frame)
+        toolbar.pack(fill="x", pady=(0, 8))
+        query_var = tk.StringVar()
+        ttk.Label(toolbar, text="搜索供应商、产品、路径或链接").pack(side="left")
+        search = ttk.Entry(toolbar, textvariable=query_var, width=52)
+        search.pack(side="left", padx=8)
+        tree_frame = ttk.Frame(frame)
+        tree_frame.pack(fill="both", expand=True)
+        columns = ("type", "supplier", "product", "status", "updated", "path")
+        tree = ttk.Treeview(tree_frame, columns=columns, show="headings", selectmode="extended")
+        for key, label, width in (("type", "来源", 130), ("supplier", "供应商", 150), ("product", "产品", 220), ("status", "状态/缺项", 200), ("updated", "更新时间", 150), ("path", "本地位置", 360)):
+            tree.heading(key, text=label)
+            tree.column(key, width=width, minwidth=80, stretch=key == "path")
+        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=scroll.set)
+        tree.pack(side="left", fill="both", expand=True)
+        scroll.pack(side="right", fill="y")
+        footer = ttk.Frame(frame)
+        footer.pack(fill="x", pady=(8, 0))
+        page_state = {"page": 1, "pages": 1, "total": 0}
+        page_label = tk.StringVar()
+        ttk.Label(footer, textvariable=page_label).pack(side="left")
+
+        def refresh(reset: bool = False) -> None:
+            if reset:
+                page_state["page"] = 1
+            rows, total = query_sources(query_var.get(), page_state["page"], 25)
+            page_state["total"] = total
+            page_state["pages"] = max(1, (total + 24) // 25)
+            page_state["page"] = min(page_state["page"], page_state["pages"])
+            tree.delete(*tree.get_children())
+            for row in rows:
+                status = row["status"] or "已导入"
+                if row["missing_fields"]:
+                    status += " · 待补：" + row["missing_fields"]
+                tree.insert("", "end", iid=str(row["id"]), values=(row["source_type"], row["supplier_name"], row["product_name"], status, row["updated_at"], row["source_path"]))
+            page_label.set(f"共 {total} 条 · 第 {page_state['page']} / {page_state['pages']} 页 · 每页 25 条")
+            previous.configure(state="normal" if page_state["page"] > 1 else "disabled")
+            next_button.configure(state="normal" if page_state["page"] < page_state["pages"] else "disabled")
+
+        def move_page(delta: int) -> None:
+            page_state["page"] += delta
+            refresh()
+
+        def selected_ids() -> list[int]:
+            return [int(value) for value in tree.selection()]
+
+        def delete_selected(delete_files: bool) -> None:
+            ids = selected_ids()
+            if not ids:
+                messagebox.showinfo("下载与导入记录", "请先选择要删除的记录。", parent=window)
+                return
+            title = "删除选中记录及对应的 Yupoo 本地相册文件夹？" if delete_files else "仅删除选中记录？本地文件不会删除。"
+            if not messagebox.askyesno("确认删除", f"{title}\n共 {len(ids)} 条。", parent=window):
+                return
+            try:
+                count, removed = delete_source_records(ids, delete_yupoo_files=delete_files)
+            except Exception as exc:
+                messagebox.showerror("删除失败", str(exc), parent=window)
+                return
+            refresh()
+            tail = f"\n实际删除 Yupoo 本地目录 {len(removed)} 个。" if delete_files else "\n原始文件保留。"
+            messagebox.showinfo("下载与导入记录", f"已删除 {count} 条记录。{tail}", parent=window)
+
+        def import_existing_yupoo() -> None:
+            root_text = filedialog.askdirectory(title="选择已有的 Yupoo 下载根目录", parent=window)
+            if not root_text:
+                return
+            root = Path(root_text)
+            count = 0
+            for info_path in root.rglob("info.json"):
+                try:
+                    album = json.loads(info_path.read_text(encoding="utf-8"))
+                    url = str(album.get("url", ""))
+                    parsed = urlparse(url)
+                    if not parsed.hostname or not parsed.hostname.lower().endswith(".yupoo.com") or "/albums/" not in parsed.path:
+                        continue
+                    detail_path = info_path.parent / "商品详情.txt"
+                    detail = {}
+                    if detail_path.exists():
+                        for line in detail_path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+                            if "：" in line:
+                                key, value = line.split("：", 1)
+                                detail[key.strip()] = value.strip()
+                    required = (("单价/price(RMB)", "采购单价"), ("箱规/Carton dimensions", "箱规尺寸"), ("单箱毛重/Gross weight kg", "单箱毛重"))
+                    missing = [label for key, label in required if not detail.get(key)]
+                    record_source("Yupoo", root.name if info_path.parent.parent == root else info_path.parent.parent.name, album.get("title", info_path.parent.name), str(info_path.parent), url, "待补资料" if missing else "待复核", missing)
+                    count += 1
+                except (OSError, ValueError, TypeError):
+                    continue
+            refresh()
+            messagebox.showinfo("下载与导入记录", f"已补录 {count} 条又拍相册记录。", parent=window)
+
+        previous = ttk.Button(footer, text="上一页", command=lambda: move_page(-1))
+        previous.pack(side="right", padx=(6, 0))
+        next_button = ttk.Button(footer, text="下一页", command=lambda: move_page(1))
+        next_button.pack(side="right")
+        ttk.Button(footer, text="删除记录及 Yupoo 本地文件", command=lambda: delete_selected(True)).pack(side="right", padx=8)
+        ttk.Button(footer, text="仅删除记录", command=lambda: delete_selected(False)).pack(side="right", padx=4)
+        ttk.Button(toolbar, text="搜索", command=lambda: refresh(True)).pack(side="left")
+        ttk.Button(toolbar, text="刷新", command=lambda: refresh()).pack(side="left", padx=5)
+        ttk.Button(toolbar, text="补录已有 Yupoo 下载", command=import_existing_yupoo).pack(side="left", padx=5)
+        search.bind("<Return>", lambda _event: refresh(True))
+        refresh()
 
     def _create_folder_template(self) -> None:
         selected = filedialog.askdirectory(title="选择统一产品资料模板的保存位置")
@@ -269,7 +398,8 @@ class ProductImporter(tk.Tk):
 
     def _build_ai_chat(self, notebook: ttk.Notebook) -> None:
         pane = ttk.Frame(notebook, padding=12)
-        notebook.add(pane, text="AI 整理对话")
+        notebook.add(pane, text="2 AI 对话与模型设置")
+        self.ai_page = pane
         ttk.Label(
             pane,
             text="围绕当前产品连续整理：询问资料内容、补充价格/箱规/重量，或让 AI 建议分类。AI 会标明依据；确认后才回填字段。模型地址和名称保存在本机，API Key 仅保存在本次运行内存。",
@@ -608,6 +738,7 @@ class ProductImporter(tk.Tk):
             return
         self.batch_products = batch or []
         self.active_product_index = None
+        self._record_batch_sources(self.batch_products)
         self._refresh_batch_tree()
         if not self.batch_products:
             self.batch_count_var.set("未识别出产品，请添加产品文件夹或检查 Excel 表头")
@@ -617,6 +748,31 @@ class ProductImporter(tk.Tk):
         self.batch_tree.selection_set("0")
         self._load_batch_product(0)
         self.status_var.set(f"已建立批次清单：{len(suppliers)} 家供应商、{len(self.batch_products)} 款产品。请逐项复核后生成档案。")
+
+    def _record_batch_sources(self, batch: list[dict[str, Any]]) -> None:
+        for item in batch:
+            info = item.get("info", {})
+            folder = Path(info.get("folder", ""))
+            source_type = "人工资料文件夹"
+            source_url = ""
+            info_path = folder / "info.json"
+            if info_path.is_file():
+                try:
+                    album = json.loads(info_path.read_text(encoding="utf-8"))
+                    parsed = urlparse(album.get("url", ""))
+                    if parsed.hostname and parsed.hostname.lower().endswith(".yupoo.com"):
+                        source_type = "Yupoo"
+                        source_url = str(album.get("url", ""))
+                except (OSError, ValueError, TypeError):
+                    pass
+            if item.get("excel_source_path"):
+                source_type = "1688/OpenCLI Excel" if source_type == "人工资料文件夹" else source_type + " + Excel"
+            values = item.get("values", {})
+            missing = missing_product_fields(values)
+            status = "待补资料" if missing else "待复核"
+            item["source_type"] = source_type
+            item["source_url"] = source_url
+            record_source(source_type, item.get("supplier_name", ""), item.get("name", ""), str(folder), source_url, status, missing)
 
     def _refresh_batch_tree(self) -> None:
         selected_index = self.active_product_index
@@ -646,6 +802,8 @@ class ProductImporter(tk.Tk):
         missing = missing_product_fields(values)
         status = "待补资料：" + "、".join(missing) if missing else "信息齐全，待复核"
         self.batch_products[index].update({"values": values, "supplier_name": values.get("supplier_name", ""), "name": values.get("name", ""), "main_image": self.main_image_var.get(), "status": status})
+        item = self.batch_products[index]
+        record_source(item.get("source_type", "人工资料文件夹"), values.get("supplier_name", ""), values.get("name", ""), item.get("info", {}).get("folder", ""), item.get("source_url", ""), "待补资料" if missing else "待复核", missing)
         if hasattr(self, "batch_tree") and self.batch_tree.exists(str(index)):
             self.batch_tree.item(str(index), values=(values.get("supplier_name", ""), values.get("name", ""), self.batch_products[index].get("source_label", ""), status))
 

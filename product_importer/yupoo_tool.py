@@ -8,6 +8,7 @@ from urllib.parse import urljoin, urlparse, parse_qs
 from urllib.request import Request, urlopen
 import sys
 from ca_bundle import CA_PEM
+from source_records import record_source
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from io import BytesIO
@@ -348,7 +349,9 @@ def sync_excel_to_txt(root,log,excel_path=None):
         if values.get('单价/price(RMB)') not in (None,'') and fx_rate is not None:
             amount=convert_rmb_to_usd(values.get('单价/price(RMB)'),fx_rate)
             if amount is not None:values['单价/price (USD)']=f'{amount:.2f}'
-        write_product_detail(folder,info.get('title',title),info.get('url',url),values);count+=1
+        merged=write_product_detail(folder,info.get('title',title),info.get('url',url),values);count+=1
+        missing=[label for key,label in (('单价/price(RMB)','采购单价'),('箱规/Carton dimensions','箱规尺寸'),('单箱毛重/Gross weight kg','单箱毛重')) if not str(merged.get(key) or '').strip()]
+        record_source('Yupoo',root.name,info.get('title',title),str(folder),info.get('url',url),'待补资料' if missing else '待复核',missing)
     saved_book=book
     if has_rmb and columns.get('单价/price (USD)'):
         saved_book=save_workbook_safely(wb,book);log(f'已按汇率 {fx_rate}（{fx_date}）回写 USD 单价：{saved_book}')
@@ -716,6 +719,9 @@ class App:
                 a['expected_image_count']=len(imgs);a['image_count']=len(saved);a['images']=saved
                 qr_path=folder/'QR.png';qrcode.make(a['url']).save(qr_path);a['qr_path']=str(qr_path)
                 (folder/'info.json').write_text(json.dumps(a,ensure_ascii=False,indent=2),encoding='utf-8')
+                detail=read_product_detail(folder)
+                missing=[label for key,label in (('单价/price(RMB)','采购单价'),('箱规/Carton dimensions','箱规尺寸'),('单箱毛重/Gross weight kg','单箱毛重')) if not str(detail.get(key) or '').strip()]
+                record_source('Yupoo',account,a['title'],str(folder),a['url'],'待补资料' if missing else '待复核',missing)
                 self.log(f'  {len(saved)}/{len(imgs)} 张图片，封面 {Path(cover_path).name if cover_path else "缺失"}')
             # Collapse historical duplicate folders, preserving the richest product TXT.
             ids_now=set()
