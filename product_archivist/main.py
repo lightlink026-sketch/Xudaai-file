@@ -25,47 +25,69 @@ def cfg_read():
 
 class Workbench(tk.Tk):
     def __init__(self):
-        super().__init__(); self.title(APP_NAME); self.geometry("1380x900"); self.minsize(1080,700)
-        self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue()
+        super().__init__(); self.title(APP_NAME); self.geometry("1560x940"); self.minsize(1240,760)
+        self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue();self.ai_history=[];self.current_module="采集与导入";self.active_task=None
         self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.ai_key=tk.StringVar()
-        self._style(); self._layout(); self.show("AI 助手")
+        self._style(); self._layout(); self.show("采集与导入")
 
     def _style(self):
         s=ttk.Style(self); s.theme_use("clam")
-        s.configure("TFrame",background="#f5f7f6"); s.configure("Card.TFrame",background="#ffffff")
+        s.configure("TFrame",background="#f3f6f4"); s.configure("Card.TFrame",background="#ffffff")
         s.configure("TLabel",background="#f5f7f6",foreground="#24352e",font=("Microsoft YaHei UI",10))
         s.configure("Title.TLabel",font=("Microsoft YaHei UI",21,"bold"),foreground="#173a2c")
         s.configure("Muted.TLabel",foreground="#6b7c74")
-        s.configure("Nav.TButton",anchor="w",padding=(16,11),font=("Microsoft YaHei UI",10))
-        s.configure("NavActive.TButton",anchor="w",padding=(16,11),font=("Microsoft YaHei UI",10,"bold"),background="#e6f0e9",foreground="#174b34")
+        s.configure("Nav.TButton",anchor="w",padding=(16,12),font=("Microsoft YaHei UI",10),background="#f3f6f4",relief="flat")
+        s.configure("NavActive.TButton",anchor="w",padding=(16,12),font=("Microsoft YaHei UI",10,"bold"),background="#e3efe8",foreground="#174b34",relief="flat")
         s.configure("Accent.TButton",padding=(14,9),background="#287252",foreground="white",font=("Microsoft YaHei UI",10,"bold"))
         s.map("Accent.TButton",background=[("active","#1c5d41")])
         s.configure("Treeview",rowheight=34,font=("Microsoft YaHei UI",10),background="white",fieldbackground="white")
         s.configure("Treeview.Heading",font=("Microsoft YaHei UI",10,"bold"),padding=7)
+        s.configure("TNotebook",background="#f3f6f4",borderwidth=0)
+        s.configure("TNotebook.Tab",padding=(13,8),font=("Microsoft YaHei UI",10))
+        s.configure("TEntry",padding=7)
 
     def _layout(self):
-        self.configure(bg="#f5f7f6")
+        self.configure(bg="#f3f6f4")
         shell=ttk.Frame(self); shell.pack(fill="both",expand=True)
-        self.nav=ttk.Frame(shell,width=220); self.nav.pack(side="left",fill="y"); self.nav.pack_propagate(False)
+        self.nav=ttk.Frame(shell,width=206); self.nav.pack(side="left",fill="y"); self.nav.pack_propagate(False)
         ttk.Label(self.nav,text="Xudaai",font=("Microsoft YaHei UI",19,"bold"),foreground="#287252").pack(anchor="w",padx=20,pady=(22,2))
         ttk.Label(self.nav,text="产品档案工作台",style="Muted.TLabel").pack(anchor="w",padx=20,pady=(0,20))
         self.nav_buttons={}
-        for name in ("AI 助手","采集与导入","产品复核","标准档案与上传","任务中心","设置"):
+        for name in ("采集与导入","产品复核","标准档案与上传","任务中心","设置"):
             button=ttk.Button(self.nav,text=name,style="Nav.TButton",command=lambda n=name:self.show(n));button.pack(fill="x",padx=8,pady=2);self.nav_buttons[name]=button
         ttk.Separator(self.nav).pack(fill="x",padx=16,pady=16)
         ttk.Label(self.nav,text="统一档案流程\n采集 → 复核 → 生成 → 上传",style="Muted.TLabel",justify="left").pack(anchor="w",padx=20)
-        main=ttk.Frame(shell); main.pack(side="left",fill="both",expand=True)
+        workspace=ttk.Frame(shell);workspace.pack(side="left",fill="both",expand=True)
+        main=ttk.Frame(workspace); main.pack(side="left",fill="both",expand=True)
         self.header=ttk.Frame(main,padding=(26,20)); self.header.pack(fill="x")
         self.page_title=ttk.Label(self.header,text="",style="Title.TLabel"); self.page_title.pack(anchor="w")
         self.page_hint=ttk.Label(self.header,text="",style="Muted.TLabel"); self.page_hint.pack(anchor="w",pady=(4,0))
         self.body=ttk.Frame(main,padding=(24,0,24,20)); self.body.pack(fill="both",expand=True)
         self.status=tk.StringVar(value="就绪"); ttk.Label(main,textvariable=self.status,style="Muted.TLabel",padding=(24,8)).pack(fill="x")
+        self._build_ai_panel(workspace)
         self.pages={}
+
+    def _build_ai_panel(self,parent):
+        self.ai_panel=ttk.Frame(parent,width=350,padding=(16,18));self.ai_panel.pack(side="right",fill="y");self.ai_panel.pack_propagate(False)
+        ttk.Label(self.ai_panel,text="模块 AI 助手",font=("Microsoft YaHei UI",14,"bold"),foreground="#173a2c").pack(anchor="w")
+        ttk.Button(self.ai_panel,text="模型配置",command=lambda:self.show("设置")).pack(anchor="e",pady=(0,5))
+        self.ai_module=tk.StringVar(value="正在协助：采集与导入")
+        ttk.Label(self.ai_panel,textvariable=self.ai_module,style="Muted.TLabel",wraplength=300).pack(anchor="w",pady=(3,10))
+        self.ai_suggestions=ttk.Frame(self.ai_panel);self.ai_suggestions.pack(fill="x",pady=(0,10))
+        chat_frame=ttk.Frame(self.ai_panel,style="Card.TFrame");chat_frame.pack(fill="both",expand=True)
+        self.chat=tk.Text(chat_frame,height=16,wrap="word",font=("Microsoft YaHei UI",10),state="disabled",relief="flat",padx=10,pady=10,background="white")
+        scroll=ttk.Scrollbar(chat_frame,orient="vertical",command=self.chat.yview);self.chat.configure(yscrollcommand=scroll.set);self.chat.pack(side="left",fill="both",expand=True);scroll.pack(side="right",fill="y")
+        row=ttk.Frame(self.ai_panel);row.pack(fill="x",pady=(10,0));self.prompt=tk.Text(row,height=4,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.prompt.pack(side="left",fill="x",expand=True)
+        ttk.Button(row,text="发送",style="Accent.TButton",command=self.ai_send).pack(side="right",padx=(8,0),anchor="s")
+        ttk.Label(self.ai_panel,text="AI 会按当前模块和选中资料回答；写入字段前会让你确认。",style="Muted.TLabel",wraplength=305).pack(anchor="w",pady=(7,0))
+        self._chat_line("助手","你好，我会根据你当前打开的功能协助处理。可以提问、粘贴链接或要求检查当前产品资料。")
+        self._refresh_ai_module()
 
     def show(self,name):
         for page in self.pages.values(): page.pack_forget()
-        titles={"工作台":"总览与待办","采集与导入":"又拍、1688、Excel 和本地目录","AI 助手":"对话采集与资料整理","产品复核":"供应商与产品资料核对","标准档案与上传":"统一目录生成与资料库上传","任务中心":"下载任务 / 上传任务","设置":"模型、服务和本地路径"}
+        titles={"采集与导入":"又拍、1688、Excel 和本地目录","产品复核":"供应商与产品资料核对","标准档案与上传":"统一目录生成与资料库上传","任务中心":"下载任务 / 上传任务","设置":"模型、服务和本地路径"}
         self.page_title.configure(text=name);self.page_hint.configure(text=titles.get(name,""))
+        self.current_module=name;self._refresh_ai_module()
         for key,button in self.nav_buttons.items():button.configure(style="NavActive.TButton" if key==name else "Nav.TButton")
         if name not in self.pages: self.pages[name]=self._build_page(name)
         page=self.pages[name]; page.pack(fill="both",expand=True)
@@ -76,12 +98,40 @@ class Workbench(tk.Tk):
         if hint: ttk.Label(card,text=hint,style="Muted.TLabel",background="white",wraplength=1000).pack(anchor="w",pady=(4,10))
         return card
 
+    def _refresh_ai_module(self):
+        if not hasattr(self,"ai_module"):return
+        self.ai_module.set(f"正在协助：{self.current_module}")
+        prompts={
+            "采集与导入":["识别这个链接并准备采集","帮我检查当前导入资料"],
+            "产品复核":["检查当前产品缺少什么","根据现有资料提出字段草稿"],
+            "标准档案与上传":["检查待上传档案的缺项","解释标准目录结构"],
+            "任务中心":["解释当前任务状态","分析当前任务失败原因"],
+            "设置":["指导我配置 AI 模型","说明这些连接设置"],
+        }
+        for child in self.ai_suggestions.winfo_children():child.destroy()
+        for prompt in prompts.get(self.current_module,[]):
+            ttk.Button(self.ai_suggestions,text=prompt,command=lambda text=prompt:self._send_ai_suggestion(text)).pack(fill="x",pady=2)
+
+    def _send_ai_suggestion(self,text):
+        if self.current_module=="采集与导入" and "链接" in text:
+            selected=self.collect_notebook.select() if hasattr(self,"collect_notebook") else ""
+            if hasattr(self,"yupoo_tab") and selected==str(self.yupoo_tab):url=next((x.strip() for x in self.yupoo_urls.get("1.0","end").splitlines() if x.strip()),"")
+            else:url=self.cli_url.get().strip() if hasattr(self,"cli_url") else ""
+            if url:text="请分析并采集这个链接；确认来源后先向我确认再执行：\n"+url
+        self.prompt.delete("1.0","end");self.prompt.insert("1.0",text);self.ai_send()
+
     def _build_page(self,name):
-        page=ttk.Frame(self.body)
+        page=ttk.Frame(self.body);canvas=tk.Canvas(page,highlightthickness=0,background="#f3f6f4");vbar=ttk.Scrollbar(page,orient="vertical",command=canvas.yview);canvas.configure(yscrollcommand=vbar.set)
+        vbar.pack(side="right",fill="y");canvas.pack(side="left",fill="both",expand=True)
+        content=ttk.Frame(canvas);window=canvas.create_window((0,0),window=content,anchor="nw")
+        content.bind("<Configure>",lambda _e,c=canvas:c.configure(scrollregion=c.bbox("all")))
+        canvas.bind("<Configure>",lambda e,c=canvas,w=window:c.itemconfigure(w,width=e.width))
+        canvas.bind("<Enter>",lambda _e,c=canvas:c.bind_all("<MouseWheel>",lambda e:c.yview_scroll(int(-1*(e.delta/120)),"units")))
+        canvas.bind("<Leave>",lambda _e,c=canvas:c.unbind_all("<MouseWheel>"))
         self.page_title.configure(text=name)
-        hints={"工作台":"","采集与导入":"又拍、1688、Excel 和人工资料进入同一产品档案流程。","AI 助手":"通用对话入口：采集链接、整理资料、询问产品、提取字段；执行前确认。","产品复核":"按供应商和产品逐项核对资料；缺失字段会标出，AI 草稿需要确认后写入。","标准档案与上传":"生成统一目录结构，检查后上传至 Xudaai 资料助手。","任务中心":"下载/导入与上传任务分开查询、分页、重试或删除任务记录。","设置":"配置 AI 模型、Xudaai 服务和本地标准档案输出位置。"}
+        hints={"采集与导入":"又拍、1688、Excel 和人工资料进入同一产品档案流程。","产品复核":"按供应商和产品逐项核对资料；缺失字段会标出，AI 草稿需要确认后写入。","标准档案与上传":"生成统一目录结构，检查后上传至 Xudaai 资料助手。","任务中心":"下载/导入与上传任务分开查询、分页、重试或删除任务记录。","设置":"配置 AI 模型、Xudaai 服务和本地标准档案输出位置。"}
         self.page_hint.configure(text=hints[name])
-        getattr(self,"build_"+{"工作台":"home","采集与导入":"collect","AI 助手":"ai","产品复核":"review","标准档案与上传":"upload","任务中心":"tasks","设置":"settings"}[name])(page)
+        getattr(self,"build_"+{"采集与导入":"collect","产品复核":"review","标准档案与上传":"upload","任务中心":"tasks","设置":"settings"}[name])(content)
         return page
 
     def build_home(self,p):
@@ -93,16 +143,24 @@ class Workbench(tk.Tk):
 
     def build_collect(self,p):
         nb=ttk.Notebook(p); nb.pack(fill="both",expand=True);self.collect_notebook=nb
-        yup=ttk.Frame(nb,padding=18); cli=ttk.Frame(nb,padding=18); imp=ttk.Frame(nb,padding=18);self.yupoo_tab=yup
+        yup=ttk.Frame(nb,padding=18); cli=ttk.Frame(nb,padding=18); imp=ttk.Frame(nb,padding=18);self.yupoo_tab=yup;self.cli_tab=cli;self.import_tab=imp
         nb.add(yup,text="又拍采集器"); nb.add(cli,text="1688 / OpenCLI"); nb.add(imp,text="Excel / 本地资料")
-        # Embed the complete Yupoo desktop-tool UI sourced from its app.py; do not
-        # replace it with a reduced link box or launch a second application window.
-        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete)
+        c=self._card(yup,"又拍商品采集","粘贴一个或多个类目/相册链接。采集后会自动整理到标准产品档案，并进入产品复核。")
+        ttk.Label(c,text="又拍链接（每行一个）",background="white").pack(anchor="w",pady=(2,5))
+        self.yupoo_urls=tk.Text(c,height=5,wrap="word",font=("Microsoft YaHei UI",10),relief="solid",borderwidth=1);self.yupoo_urls.pack(fill="x")
+        row=ttk.Frame(c,style="Card.TFrame");row.pack(fill="x",pady=(10,0))
+        ttk.Label(row,text="归档位置",background="white").pack(side="left")
+        self.archive_location=tk.StringVar(value=str(self.output));ttk.Label(row,textvariable=self.archive_location,background="white",foreground="#65766d").pack(side="left",padx=8)
+        ttk.Button(row,text="开始采集并归档",style="Accent.TButton",command=self.start_yupoo).pack(side="right")
+        self.yupoo_backend=ttk.Frame(yup)
+        # Keep the supplied app.py implementation as the embedded worker; its
+        # legacy spreadsheet screen is not part of the unified product workflow.
+        self.yupoo_app=YupooProcessor(self.yupoo_backend,embedded=True,on_complete=self._yupoo_complete)
         self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self._yupoo_staging_root()))
-        c=self._card(cli,"1688 链接采集","从 AI 助手粘贴链接，由模型识别采集意图；确认后调用本机 OpenCLIApp。此处保留手动执行入口。")
-        self.cli_url=tk.StringVar(); ttk.Entry(c,textvariable=self.cli_url).pack(fill="x",pady=4)
+        c=self._card(cli,"1688 链接采集","可在右侧 AI 助手粘贴链接并请求采集；AI 确认来源后调用本机 OpenCLIApp。")
+        self.cli_url=tk.StringVar();link_row=ttk.Frame(c,style="Card.TFrame");link_row.pack(fill="x",pady=5);ttk.Label(link_row,text="1688 商品链接",width=20,background="white").pack(side="left");ttk.Entry(link_row,textvariable=self.cli_url).pack(side="left",fill="x",expand=True,padx=8)
         ttk.Button(c,text="让 AI 分析并采集",style="Accent.TButton",command=self.request_1688_via_ai).pack(anchor="e",pady=(8,0))
-        c=self._card(imp,"导入现有资料","选择一个含多个供应商/产品的根目录；也可以选择 Excel 清单并匹配同目录的产品图片。")
+        c=self._card(imp,"导入 Excel 或本地目录","选择含多个供应商和产品的目录，或用 Excel 清单匹配产品图片。")
         self.import_folder=tk.StringVar(); self.import_excel=tk.StringVar()
         self._file_row(c,"资料根目录",self.import_folder,True); self._file_row(c,"产品 Excel（可选）",self.import_excel,False)
         ttk.Button(c,text="扫描并建立复核清单",style="Accent.TButton",command=self.scan_import).pack(anchor="e",pady=(10,0))
@@ -120,9 +178,10 @@ class Workbench(tk.Tk):
         elif not hasattr(self,"yupoo_app"):self.show("采集与导入")
         app=self.yupoo_app
         self.collect_notebook.select(self.yupoo_tab)
-        urls=app.url.get("1.0","end").strip(); output=str(self._yupoo_staging_root())
+        urls=self.yupoo_urls.get("1.0","end").strip(); output=str(self._yupoo_staging_root())
         if not urls:return messagebox.showinfo(APP_NAME,"请粘贴 Yupoo 链接。")
         Path(output).mkdir(parents=True,exist_ok=True)
+        app.url.delete("1.0","end");app.url.insert("1.0",urls)
         app.dest.delete(0,"end");app.dest.insert(0,output)
         self.status.set("又拍采集中…")
         app.start_job("download")
@@ -164,7 +223,6 @@ class Workbench(tk.Tk):
     def request_1688_via_ai(self):
         url=self.cli_url.get().strip()
         if not url:return messagebox.showinfo(APP_NAME,"请先粘贴 1688 商品或店铺链接。")
-        self.show("AI 助手")
         prompt=f"请分析这个 1688 链接，并在我确认后调用本机 OpenCLIApp 采集商品信息和素材：{url}"
         self.prompt.delete("1.0","end");self.prompt.insert("1.0",prompt);self.ai_send()
 
@@ -248,6 +306,7 @@ class Workbench(tk.Tk):
         self._show_review_batch()
 
     def _show_review_batch(self):
+        self.selected=None
         for item in self.batch:
             values=item["values"]; missing=missing_product_fields(values)
             record_source(values.get("source_type","本地资料"),values.get("supplier_name",""),values.get("name",""),item["info"]["folder"],values.get("source_url",""),"待补资料" if missing else "待复核",missing)
@@ -258,8 +317,8 @@ class Workbench(tk.Tk):
     def build_review(self,p):
         bar=ttk.Frame(p); bar.pack(fill="x",pady=(0,8)); self.review_count=tk.StringVar(value=f"{len(self.batch)} 款产品")
         ttk.Label(bar,textvariable=self.review_count,style="Muted.TLabel").pack(side="left")
-        self.tree=ttk.Treeview(p,columns=("supplier","name","missing","source"),show="headings",height=8)
-        for col,title,w in (("supplier","供应商",170),("name","产品名称",250),("missing","待补字段",360),("source","来源",350)):
+        self.tree=ttk.Treeview(p,columns=("supplier","name","missing","source"),show="headings",height=7)
+        for col,title,w in (("supplier","供应商",120),("name","产品名称",190),("missing","待补字段",235),("source","来源",260)):
             self.tree.heading(col,text=title);self.tree.column(col,width=w,stretch=col in {"missing","source"})
         self.tree.pack(fill="x"); self.tree.bind("<<TreeviewSelect>>",self.select_product)
         fields=ttk.Frame(p); fields.pack(fill="both",expand=True,pady=10)
@@ -300,29 +359,23 @@ class Workbench(tk.Tk):
         if not silent:self.status.set("产品字段已保存到当前批次。")
 
     def build_upload(self,p):
-        c=self._card(p,"档案输出位置","每个产品输出一个统一档案目录：产品档案.json、图片/、视频/、规格与包装/、资质与说明/、原始资料/。")
+        c=self._card(p,"标准档案输出与上传","每款产品一个目录，包含产品档案、图片、视频、规格包装和资质说明。")
         self.out_var=tk.StringVar(value=str(self.output)); self._file_row(c,"输出目录",self.out_var,True)
         row=ttk.Frame(c,style="Card.TFrame");row.pack(fill="x",pady=8)
         ttk.Label(row,text="Xudaai 地址",background="white").pack(side="left");self.server=tk.StringVar(value=self.cfg.get("server","http://127.0.0.1:8002"));ttk.Entry(row,textvariable=self.server,width=45).pack(side="left",padx=8)
         self.user=tk.StringVar(value=self.cfg.get("user","admin"));self.password=tk.StringVar();ttk.Entry(row,textvariable=self.user,width=16).pack(side="left",padx=4);ttk.Entry(row,textvariable=self.password,width=20,show="•").pack(side="left",padx=4)
         ttk.Button(c,text="生成所选产品标准档案",command=self.generate).pack(side="left",pady=8)
         ttk.Button(c,text="上传已生成档案",style="Accent.TButton",command=self.upload).pack(side="left",padx=10,pady=8)
-        self.package_list=tk.Listbox(p,height=12,font=("Microsoft YaHei UI",10));self.package_list.pack(fill="both",expand=True)
+        self.package_list=tk.Listbox(p,height=12,font=("Microsoft YaHei UI",10),relief="flat",highlightthickness=1,highlightbackground="#dce5df");self.package_list.pack(fill="both",expand=True)
+        self.package_list.bind("<<ListboxSelect>>",self.select_package)
 
-    def build_ai(self,p):
-        self.ai_history=[]
-        top=self._card(p,"通用 AI 助手","从一个对话入口完成采集、资料导入、字段整理和产品问答。采集或修改资料前会先让你确认。")
-        tools=ttk.Frame(top,style="Card.TFrame");tools.pack(fill="x",pady=(0,8))
-        ttk.Button(tools,text="采集与导入",command=lambda:self.show("采集与导入")).pack(side="left")
-        ttk.Button(tools,text="产品复核",command=lambda:self.show("产品复核")).pack(side="left",padx=6)
-        ttk.Button(tools,text="AI 模型设置",command=lambda:self.show("设置")).pack(side="right")
-        chat_frame=ttk.Frame(top,style="Card.TFrame");chat_frame.pack(fill="both",expand=True)
-        self.chat=tk.Text(chat_frame,height=20,wrap="word",font=("Microsoft YaHei UI",11),state="disabled",relief="flat",padx=12,pady=10)
-        scroll=ttk.Scrollbar(chat_frame,orient="vertical",command=self.chat.yview);self.chat.configure(yscrollcommand=scroll.set);self.chat.pack(side="left",fill="both",expand=True);scroll.pack(side="right",fill="y")
-        row=ttk.Frame(top,style="Card.TFrame");row.pack(fill="x",pady=(10,0));self.prompt=tk.Text(row,height=4,wrap="word",font=("Microsoft YaHei UI",11));self.prompt.pack(side="left",fill="x",expand=True)
-        ttk.Button(row,text="发送",style="Accent.TButton",command=self.ai_send).pack(side="right",padx=(8,0))
-        ttk.Label(top,text="你可以粘贴 1688 链接并说‘采集这个商品’，也可以粘贴又拍链接或直接提出整理要求。",background="white",style="Muted.TLabel").pack(anchor="w",pady=(6,0))
-        self._chat_line("助手","你好，我是 Xudaai 通用产品资料助手。可以直接粘贴 1688 链接并说‘采集这个商品’，或粘贴又拍类目链接；也可以询问产品、整理 Excel/文件夹、补全档案字段。")
+    def select_package(self,_=None):
+        if not hasattr(self,"package_list") or not self.package_list.curselection():return
+        index=self.package_list.curselection()[0]
+        if index<len(self.packages):
+            folder,manifest=self.packages[index]
+            self.active_package={"name":manifest.get("name"),"path":str(folder),"missing":manifest.get("missing_fields",[])}
+            self._refresh_ai_module()
 
     def _chat_line(self,role,text):
         self.chat.configure(state="normal");self.chat.insert("end",f"{role}\n{text}\n\n");self.chat.configure(state="disabled");self.chat.see("end")
@@ -339,13 +392,34 @@ class Workbench(tk.Tk):
             self._ai_request(prompt,{"detected_url":yup,"requested_action":"download_yupoo"},lambda result:self._ai_route_result(result,"Yupoo",yup));return
         if cli:
             self._ai_request(prompt,{"detected_url":cli,"requested_action":"download_1688"},lambda result:self._ai_route_result(result,"1688/OpenCLI",cli));return
+        if self.current_module=="采集与导入" and re.search(r"采集|下载|抓取",prompt):
+            selected=self.collect_notebook.select() if hasattr(self,"collect_notebook") else ""
+            if hasattr(self,"yupoo_tab") and selected==str(self.yupoo_tab):
+                contextual=next((x.strip() for x in self.yupoo_urls.get("1.0","end").splitlines() if x.strip()),"");source="Yupoo" if contextual else ""
+            else:
+                contextual=self.cli_url.get().strip() if hasattr(self,"cli_url") else "";source="1688/OpenCLI" if contextual else ""
+            if contextual:
+                action="download_yupoo" if source=="Yupoo" else "download_1688"
+                self._ai_request(prompt,{"detected_url":contextual,"requested_action":action},lambda result,s=source,u=contextual:self._ai_route_result(result,s,u));return
         self._ai_request(prompt,self._active_ai_context(),self._ai_result)
 
     def _active_ai_context(self):
+        context={"current_module":self.current_module}
         if self.selected is not None and self.selected<len(self.batch):
             item=self.batch[self.selected]
-            return {"selected_product":item.get("values",{}),"source_text":item.get("info",{}).get("source_text","")[:18000],"source_files":item.get("info",{}).get("source_documents",[])[:80]}
-        return {"batch_products":[{"supplier":x.get("supplier_name"),"name":x.get("name"),"missing":missing_product_fields(x.get("values",{}))} for x in self.batch[:100]]}
+            context["selected_product"]=item.get("values",{});context["source_text"]=item.get("info",{}).get("source_text","")[:18000];context["source_files"]=item.get("info",{}).get("source_documents",[])[:80]
+        if self.current_module=="采集与导入":
+            context.update(yupoo_urls=self.yupoo_urls.get("1.0","end").strip() if hasattr(self,"yupoo_urls") else "",opencli_url=self.cli_url.get() if hasattr(self,"cli_url") else "",import_folder=self.import_folder.get() if hasattr(self,"import_folder") else "",import_excel=self.import_excel.get() if hasattr(self,"import_excel") else "")
+        elif self.current_module=="产品复核":
+            context["batch_products"]=[{"supplier":x.get("supplier_name"),"name":x.get("name"),"missing":missing_product_fields(x.get("values",{}))} for x in self.batch[:100]]
+        elif self.current_module=="标准档案与上传":
+            context["archives"]=[{"name":manifest.get("name"),"path":str(folder),"missing":manifest.get("missing_fields",[])} for folder,manifest in self.packages[:100]]
+            context["selected_archive"]=getattr(self,"active_package",None)
+            context["output_root"]=self.out_var.get() if hasattr(self,"out_var") else str(self.output)
+        elif self.current_module=="任务中心":context["selected_task"]=self.active_task
+        elif self.current_module=="设置":
+            context.update(ai_api=self.ai_url.get(),ai_model=self.ai_model.get(),xudaai_server=self.server.get() if hasattr(self,"server") else self.cfg.get("server","http://127.0.0.1:8002"),archive_output=self.out_var.get() if hasattr(self,"out_var") else str(self.output))
+        return context
 
     def _ai_request(self,prompt,context,callback):
         api=self.ai_url.get().strip() if hasattr(self,"ai_url") else self.cfg.get("ai_url","");model=self.ai_model.get().strip() if hasattr(self,"ai_model") else self.cfg.get("ai_model","");key=self.ai_key.get().strip() if hasattr(self,"ai_key") else ""
@@ -390,13 +464,13 @@ class Workbench(tk.Tk):
 
     def start_yupoo_with_url(self,url):
         if "采集与导入" not in self.pages or not hasattr(self,"yupoo_app"):self.show("采集与导入")
-        app=self.yupoo_app;app.url.delete("1.0","end");app.url.insert("1.0",url)
+        app=self.yupoo_app;self.yupoo_urls.delete("1.0","end");self.yupoo_urls.insert("1.0",url);app.url.delete("1.0","end");app.url.insert("1.0",url)
         self.start_yupoo()
 
     def _ai_result(self,result):
         reply=str(result.get("reply","整理完成。"));self._chat_line("助手",reply)
         updates=result.get("field_updates",{})
-        if not isinstance(updates,dict) or self.selected is None or self.selected>=len(self.batch):return
+        if self.current_module!="产品复核" or not isinstance(updates,dict) or self.selected is None or self.selected>=len(self.batch) or not hasattr(self,"form"):return
         labels=dict(FIELDS); current=self.batch[self.selected]["values"]
         pending={k:str(v) for k,v in updates.items() if k in labels and str(v or "").strip() and not str(current.get(k,"")).strip()}
         if not pending:return
@@ -454,9 +528,13 @@ class Workbench(tk.Tk):
             pane=ttk.Frame(tabs,padding=10);tabs.add(pane,text=title)
             query=tk.StringVar(); row=ttk.Frame(pane);row.pack(fill="x",pady=(0,8));ttk.Entry(row,textvariable=query,width=45).pack(side="left")
             tree=ttk.Treeview(pane,columns=("date","source","supplier","summary","count","status","path"),show="headings",selectmode="extended")
-            for key,label,w in (("date","时间",145),("source","来源",130),("supplier","供应商",150),("summary","任务",250),("count","产品数",80),("status","状态",130),("path","位置",330)):
+            for key,label,w in (("date","时间",115),("source","来源",100),("supplier","供应商",105),("summary","任务",180),("count","产品数",62),("status","状态",100),("path","位置",210)):
                 tree.heading(key,text=label);tree.column(key,width=w,stretch=key in {"summary","path"})
             tree.pack(fill="both",expand=True); footer=ttk.Frame(pane);footer.pack(fill="x",pady=8);state={"page":1,"rows":[]};label=ttk.Label(footer,text="");label.pack(side="left")
+            def select_task(_event=None,tr=tree,st=state):
+                selected=tr.selection();self.active_task=next((dict(row) for row in st["rows"] if selected and row["task_id"]==selected[0]),None)
+                self._refresh_ai_module()
+            tree.bind("<<TreeviewSelect>>",select_task)
             def refresh(st=state,tr=tree,q=query,t=kind,lab=label):
                 rows,total=list_tasks(t,q.get(),st["page"],25);st["rows"]=rows;tr.delete(*tr.get_children())
                 for x in rows:tr.insert("","end",iid=x["task_id"],values=(x["created_at"],x["source_type"],x["supplier"],x["summary"],x["product_count"],x["status"],x["output_path"] or x["detail"][:100]))
@@ -510,6 +588,8 @@ class Workbench(tk.Tk):
 
     def save_settings(self):
         self.cfg.update(output=self.out_var.get() if hasattr(self,"out_var") else str(self.output),server=self.server.get() if hasattr(self,"server") else "http://127.0.0.1:8002",user=self.user.get() if hasattr(self,"user") else "admin",ai_url=self.ai_url.get(),ai_model=self.ai_model.get())
-        CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8");self.status.set("设置已保存；API Key 不会写入磁盘。")
+        self.output=Path(self.cfg["output"]);CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+        if hasattr(self,"archive_location"):self.archive_location.set(str(self.output))
+        self.status.set("设置已保存；API Key 不会写入磁盘。")
 
 if __name__=="__main__":Workbench().mainloop()
