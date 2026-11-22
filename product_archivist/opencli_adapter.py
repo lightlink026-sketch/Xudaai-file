@@ -56,7 +56,8 @@ def download_1688(url: str, output_root: Path) -> dict[str, Any]:
     details["_source_url"] = url
     title = str(details.get("title") or details.get("name") or "1688 商品").strip()
     supplier = str(details.get("seller_name") or details.get("supplier_name") or "1688供应商").strip()
-    item_id = str(details.get("offer_id") or re.search(r"(?:offer/|offerId=)(\d+)", url, re.I).group(1) if re.search(r"(?:offer/|offerId=)(\d+)", url, re.I) else "")
+    match = re.search(r"(?:offer/|offerId=)(\d+)", url, re.I)
+    item_id = str(details.get("offer_id") or (match.group(1) if match else ""))
     product_name = safe_stem(title)
     supplier_dir = output_root / safe_stem(supplier)
     product_dir = supplier_dir / product_name

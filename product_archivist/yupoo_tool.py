@@ -651,7 +651,9 @@ class App:
         xlsx_path=root/(name+'.xlsx')
         existing_xlsx=xlsx_path if xlsx_path.exists() else root/'Yupoo_商品报价表.xlsx'
         if mode in ('all','download'):
-            if existing_xlsx.exists():sync_excel_to_txt(root,self.log,existing_xlsx)
+            # The archive workbench asks for source downloads only. Avoid running
+            # the stand-alone quote workbook / currency-sync workflow on refresh.
+            if mode=='all' and existing_xlsx.exists():sync_excel_to_txt(root,self.log,existing_xlsx)
             album_map={};needs_download=[];checked_at=time.strftime('%Y-%m-%d %H:%M:%S')
             for url in links:
                 found=discover_albums(url,self.log);album_ids={str(a['id']) for a in found};old=records.get((account,url),{});old_count=old.get('产品数量')
