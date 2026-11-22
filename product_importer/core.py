@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import re
+import shutil
+import uuid
+from datetime import date
+from pathlib import Path
+from typing import Any
+
+from docx import Document
+from openpyxl import load_workbook
+from pptx import Presentation
+from pypdf import PdfReader
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".gif"}
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".mp3", ".wav", ".m4a", ".aac"}
+DOC_EXTS = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".md", ".csv", ".json"}
+SUPPORTED_EXTS = IMAGE_EXTS | VIDEO_EXTS | DOC_EXTS
+
+
+def file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def safe_stem(value: str) -> str:
+    value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", value.strip())
+    value = re.sub(r"\s+", "_", value)
+    return value[:90].strip("._ ") or "未命名产品"
+
+
+def read_text(path: Path, max_chars: int = 30000) -> str:
+    ext = path.suffix.lower()
+    try:
+        if ext in {".txt", ".md", ".json", ".csv"}:
+            if ext == ".csv":
+                with path.open("r", encoding="utf-8-sig", errors="replace", newline="") as stream:
+                    rows = list(csv.reader(stream))[:300]
+                return "\n".join(" | ".join(cell.strip() for cell in row[:30]) for row in rows)[:max_chars]
+            return path.read_text(encoding="utf-8-sig", errors="replace")[:max_chars]
+        if ext == ".xlsx":
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            lines = []
+            for sheet in workbook.worksheets[:12]:
+                lines.append(f"[工作表: {sheet.title}]")
+                for index, row in enumerate(sheet.iter_rows(values_only=True)):
+                    if index >= 400:
+                        break
+                    cells = [str(value).strip() if value is not None else "" for value in row[:40]]
+                    if any(cells):
+                        lines.append(" | ".join(cells))
+            workbook.close()
+            return "\n".join(lines)[:max_chars]
+        if ext == ".pdf":
+            reader = PdfReader(str(path))
+            return "\n".join((page.extract_text() or "") for page in reader.pages[:80])[:max_chars]
+        if ext == ".docx":
+            document = Document(path)
+            lines = [paragraph.text for paragraph in document.paragraphs if paragraph.text.strip()]
+            for table in document.tables:
+                for row in table.rows:
+                    lines.append(" | ".join(cell.text.strip() for cell in row.cells))
+            return "\n".join(lines)[:max_chars]
+        if ext == ".pptx":
+            presentation = Presentation(path)
+            lines = []
+            for slide in presentation.slides[:100]:
+                for shape in slide.shapes:
+                    if getattr(shape, "has_text_frame", False) and shape.text.strip():
+                        lines.append(shape.text.strip())
+                    if getattr(shape, "has_table", False):
+                        for row in shape.table.rows:
+                            lines.append(" | ".join(cell.text.strip() for cell in row.cells))
+            return "\n".join(lines)[:max_chars]
+    except Exception as exc:
+        return f"[解析失败: {path.name}: {exc}]"
+    return ""
+
+
+def scan_product_folder(folder: Path, extra_excel: Path | None = None) -> dict[str, Any]:
+    folder = folder.resolve()
+    if not folder.is_dir():
+        raise ValueError("请选择一个产品资料文件夹。")
+    files = sorted(path for path in folder.rglob("*") if path.is_file() and not path.is_symlink() and path.suffix.lower() in SUPPORTED_EXTS)
+    if len(files) > 500:
+        raise ValueError("一个产品目录最多处理 500 个受支持文件。")
+    if not files:
+        raise ValueError("该目录中没有支持的图片、视频或文档。")
+    texts = []
+    sources = []
+    budget = 70000
+    parse_paths = [path for path in files if path.suffix.lower() in DOC_EXTS]
+    if extra_excel and extra_excel.is_file() and extra_excel.resolve() not in {path.resolve() for path in files}:
+        parse_paths.append(extra_excel.resolve())
+    for path in parse_paths:
+        if budget <= 0:
+            break
+        text = read_text(path, min(18000, budget))
+        if text.strip():
+            relative = path.relative_to(folder).as_posix() if path.is_relative_to(folder) else path.name
+            texts.append(f"\n===== 来源文件: {relative} =====\n{text}")
+            sources.append(relative)
+            budget -= len(text)
+    images = [path for path in files if path.suffix.lower() in IMAGE_EXTS]
+    videos = [path for path in files if path.suffix.lower() in VIDEO_EXTS]
+    return {
+        "folder": str(folder),
+        "folder_name": folder.name,
+        "files": files,
+        "images": images,
+        "videos": videos,
+        "source_documents": sources,
+        "source_text": "\n".join(texts),
+    }
+
+
+def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_root: Path, values: dict[str, Any], main_image: str = "") -> tuple[Path, dict[str, Any]]:
+    if len(info["files"]) + 1 > 250:
+        raise ValueError("一个产品档案最多上传 250 个文件，请先把无关资料移出该产品文件夹。")
+    source_root = Path(info["folder"]).resolve()
+    product_name = str(values.get("name") or source_root.name).strip()
+    if not product_name:
+        raise ValueError("请填写产品名称。")
+    product_code = str(values.get("product_code") or f"P-{date.today():%Y%m%d}-{uuid.uuid4().hex[:8].upper()}")
+    product_id = str(values.get("product_id") or uuid.uuid4())
+    output_root = output_root.resolve()
+    if output_root == source_root or output_root.is_relative_to(source_root):
+        raise ValueError("标准档案输出目录不能放在供应商源文件夹里面，以免将生成档案再次当作原始资料导入。")
+    destination = output_root / f"{product_code}-{safe_stem(product_name)}"
+    if destination.exists():
+        raise FileExistsError(f"输出目录已存在：{destination}")
+    images_dir = destination / "图片"
+    gallery_dir = images_dir / "副图"
+    videos_dir = destination / "视频"
+    originals_dir = destination / "原始资料"
+    specs_dir = destination / "规格"
+    for path in (gallery_dir, videos_dir, originals_dir, specs_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    image_manifest = []
+    selected = next((path for path in info["images"] if path.relative_to(source_root).as_posix() == main_image), info["images"][0] if info["images"] else None)
+    for path in info["images"]:
+        is_main = selected is not None and path.resolve() == selected.resolve()
+        name = f"主图{path.suffix.lower()}" if is_main else f"{len(image_manifest):02d}_{safe_stem(path.stem)}{path.suffix.lower()}"
+        target = images_dir / name if is_main else gallery_dir / name
+        if target.exists():
+            target = target.with_name(f"{target.stem}_{file_sha256(path)[:8]}{target.suffix}")
+        shutil.copy2(path, target)
+        image_manifest.append({"path": target.relative_to(destination).as_posix(), "role": "main" if is_main else "gallery", "source": path.relative_to(source_root).as_posix(), "sha256": file_sha256(path)})
+
+    video_manifest = []
+    for path in info["videos"]:
+        target = videos_dir / f"{safe_stem(path.stem)}{path.suffix.lower()}"
+        if target.exists():
+            target = videos_dir / f"{safe_stem(path.stem)}_{file_sha256(path)[:8]}{path.suffix.lower()}"
+        shutil.copy2(path, target)
+        video_manifest.append({"path": target.relative_to(destination).as_posix(), "source": path.relative_to(source_root).as_posix(), "sha256": file_sha256(path)})
+
+    source_manifest = []
+    for path in info["files"]:
+        if path.suffix.lower() in IMAGE_EXTS | VIDEO_EXTS:
+            continue
+        relative = path.relative_to(source_root)
+        target = originals_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(path, target)
+        source_manifest.append({"path": target.relative_to(destination).as_posix(), "source": relative.as_posix(), "sha256": file_sha256(path)})
+    if extra_excel and extra_excel.is_file() and not extra_excel.resolve().is_relative_to(source_root):
+        target = originals_dir / "补充Excel" / extra_excel.name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(extra_excel, target)
+        source_manifest.append({"path": target.relative_to(destination).as_posix(), "source": str(extra_excel), "sha256": file_sha256(extra_excel)})
+
+    product = {
+        "schema_version": 1,
+        "product_id": product_id,
+        "product_code": product_code,
+        "name": product_name,
+        "category": str(values.get("category", "")).strip(),
+        "brand": str(values.get("brand", "")).strip(),
+        "model": str(values.get("model", "")).strip(),
+        "sku": str(values.get("sku", "")).strip(),
+        "supplier_name": str(values.get("supplier_name", "")).strip(),
+        "supplier_sku": str(values.get("supplier_sku", "")).strip(),
+        "description": str(values.get("description", "")).strip(),
+        "colors": str(values.get("colors", "")).strip(),
+        "sizes": str(values.get("sizes", "")).strip(),
+        "material": str(values.get("material", "")).strip(),
+        "unit": str(values.get("unit", "pcs")).strip(),
+        "currency": str(values.get("currency", "")).strip(),
+        "unit_price": str(values.get("unit_price", "")).strip(),
+        "moq": str(values.get("moq", "")).strip(),
+        "carton_spec": str(values.get("carton_spec", "")).strip(),
+        "units_per_carton": str(values.get("units_per_carton", "")).strip(),
+        "carton_quantity": str(values.get("carton_quantity", "")).strip(),
+        "carton_volume_cbm": str(values.get("carton_volume_cbm", "")).strip(),
+        "gross_weight_kg_per_carton": str(values.get("gross_weight_kg_per_carton", "")).strip(),
+        "net_weight_kg_per_carton": str(values.get("net_weight_kg_per_carton", "")).strip(),
+        "lead_time": str(values.get("lead_time", "")).strip(),
+        "notes": str(values.get("notes", "")).strip(),
+        "field_sources": values.get("field_sources", {}),
+        "review_status": "human_confirmed",
+        "source_folder_name": source_root.name,
+        "images": image_manifest,
+        "videos": video_manifest,
+        "source_files": source_manifest,
+    }
+    with (destination / "产品档案.json").open("w", encoding="utf-8") as stream:
+        json.dump(product, stream, ensure_ascii=False, indent=2)
+    return destination, product
