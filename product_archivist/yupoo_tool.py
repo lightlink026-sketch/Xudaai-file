@@ -543,29 +543,48 @@ class App:
         if not embedded:
             root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620)
         self.q=queue.Queue();self.busy=False
-        style=ttk.Style();style.configure('TButton',padding=7);style.configure('Header.TLabel',font=('Microsoft YaHei UI',15,'bold'))
-        main=ttk.Frame(root,padding=16);main.pack(fill='both',expand=True);self.main_frame=main
-        ttk.Label(main,text=APP_TITLE,style='Header.TLabel').pack(anchor='w',pady=(0,12))
-        ttk.Label(main,text='Yupoo 类目链接（支持批量，每行一个 URL）').pack(anchor='w')
-        row=ttk.Frame(main);row.pack(fill='x',pady=(4,10));self.url=tk.Text(row,height=3,wrap='word');self.url.pack(side='left',fill='x',expand=True);self.url.insert('1.0','https://he588123.x.yupoo.com/categories');ttk.Button(row,text='打开首个链接',command=self.open_link).pack(side='left',padx=(8,0))
-        ttk.Label(main,text='保存位置').pack(anchor='w');row2=ttk.Frame(main);row2.pack(fill='x',pady=(4,10));self.dest=ttk.Entry(row2);self.dest.pack(side='left',fill='x',expand=True);self.dest.insert(0,str(Path.home()/'Desktop'/'Yupoo下载'));ttk.Button(row2,text='浏览…',command=self.browse).pack(side='left',padx=(8,0))
-        ttk.Label(main,text='下载与更新').pack(anchor='w',pady=(4,2))
-        opts=ttk.Frame(main);opts.pack(fill='x',pady=(0,6));self.make_xlsx=tk.BooleanVar(value=True);self.make_pdf=tk.BooleanVar(value=False);ttk.Label(opts,text='下载完成后生成 Excel；PDF 请在下一步选择 Excel 生成。').pack(side='left')
+        style=ttk.Style();style.configure('Header.TLabel',font=('Microsoft YaHei UI',15,'bold'),foreground='#202b26')
+        style.configure('Subhead.TLabel',font=('Microsoft YaHei UI',11,'bold'),foreground='#477963')
+        main=ttk.Frame(root,padding=(12,8) if embedded else 16);main.pack(fill='both',expand=True);self.main_frame=main
+        ttk.Label(main,text=APP_TITLE,style='Header.TLabel').pack(anchor='w',pady=(0,6 if embedded else 12))
+        if embedded:
+            columns=ttk.Frame(main);columns.pack(fill='both',expand=True)
+            columns.columnconfigure(0,weight=3);columns.columnconfigure(1,weight=2);columns.rowconfigure(0,weight=1)
+            controls=ttk.Frame(columns);controls.grid(row=0,column=0,sticky='nsew',padx=(0,12))
+            log_parent=ttk.Frame(columns);log_parent.grid(row=0,column=1,sticky='nsew')
+        else:controls=main;log_parent=main
+        if embedded:
+            self.path_settings=ttk.Frame(controls)
+            path_row=ttk.Frame(self.path_settings);path_row.pack(fill='x',pady=(0,8));self.dest=ttk.Entry(path_row,style='Compact.TEntry');self.dest.pack(side='left',fill='x',expand=True);self.dest.insert(0,str(Path.home()/'Desktop'/'Yupoo下载'));ttk.Button(path_row,text='浏览…',style='Compact.TButton',command=self.browse).pack(side='left',padx=(8,0))
+            self.path_toggle=ttk.Button(controls,text='保存位置设置  ▸',style='Compact.TButton',command=self.toggle_path_settings);self.path_toggle.pack(anchor='w',pady=(0,8))
+        else:
+            ttk.Label(controls,text='保存位置').pack(anchor='w');row2=ttk.Frame(controls);row2.pack(fill='x',pady=(4,10));self.dest=ttk.Entry(row2);self.dest.pack(side='left',fill='x',expand=True);self.dest.insert(0,str(Path.home()/'Desktop'/'Yupoo下载'));ttk.Button(row2,text='浏览…',command=self.browse).pack(side='left',padx=(8,0))
+        ttk.Label(controls,text='Yupoo 类目链接（支持批量，每行一个 URL）',style='Subhead.TLabel').pack(anchor='w')
+        row=ttk.Frame(controls);row.pack(fill='x',pady=(5,12));self.url=tk.Text(row,height=2 if embedded else 3,wrap='word',font=('Microsoft YaHei UI',11),relief='flat',borderwidth=1,padx=8,pady=6,background='#fbfcfb',highlightthickness=1,highlightbackground='#e2e8e3',highlightcolor='#477963');self.url.pack(side='left',fill='x',expand=True);self.url.insert('1.0','https://he588123.x.yupoo.com/categories');ttk.Button(row,text='打开首个链接',style='Compact.TButton',command=self.open_link).pack(side='left',padx=(8,0))
+        ttk.Label(controls,text='下载与更新',style='Subhead.TLabel').pack(anchor='w',pady=(4,4))
+        opts=ttk.Frame(controls);opts.pack(fill='x',pady=(0,8));self.make_xlsx=tk.BooleanVar(value=True);self.make_pdf=tk.BooleanVar(value=False);ttk.Label(opts,text='下载完成后生成 Excel；PDF 请在下一步选择 Excel 生成。',wraplength=500 if embedded else 900,style='Muted.TLabel').pack(anchor='w')
         self.action_buttons=[]
-        download_row=ttk.Frame(main);download_row.pack(fill='x',pady=(0,8))
+        download_row=ttk.Frame(controls);download_row.pack(fill='x',pady=(0,8))
         self.start=ttk.Button(download_row,text='下载图片 + 生成 Excel',command=lambda:self.start_job('all'));self.start.pack(side='left',padx=(0,8))
         b=ttk.Button(download_row,text='仅下载/更新图片',command=lambda:self.start_job('download'));b.pack(side='left');self.action_buttons.append(b)
         self.force_download=tk.BooleanVar(value=False);ttk.Checkbutton(download_row,text='强制下载（忽略记录，重抓本批链接）',variable=self.force_download).pack(side='left',padx=(12,0))
-        ttk.Label(main,text='第二步：根据 Excel 生成 PDF').pack(anchor='w',pady=(2,2))
-        gen_row=ttk.Frame(main);gen_row.pack(fill='x',pady=(0,8))
+        ttk.Label(controls,text='第二步：根据 Excel 生成 PDF',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+        gen_row=ttk.Frame(controls);gen_row.pack(fill='x',pady=(0,8))
         self.pdf_from_excel_button=ttk.Button(gen_row,text='选择 Excel 并生成 PDF',command=self.choose_excel_for_pdf);self.pdf_from_excel_button.pack(side='left',padx=(0,8));self.action_buttons.append(self.pdf_from_excel_button)
         b=ttk.Button(gen_row,text='单独生成 Excel',command=lambda:self.start_job('excel'));b.pack(side='left');self.action_buttons.append(b)
-        ttk.Label(main,text='商品信息回写').pack(anchor='w',pady=(2,2))
-        sync_row=ttk.Frame(main);sync_row.pack(fill='x',pady=(0,8))
+        ttk.Label(controls,text='商品信息回写',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+        sync_row=ttk.Frame(controls);sync_row.pack(fill='x',pady=(0,8))
         self.sync_button=ttk.Button(sync_row,text='选择 Excel 并回写商品详情 TXT',command=self.choose_excel_to_sync);self.sync_button.pack(side='left');self.action_buttons.append(self.sync_button)
-        self.progress=ttk.Progressbar(main,mode='indeterminate');self.progress.pack(fill='x',pady=4)
-        ttk.Label(main,text='运行记录').pack(anchor='w',pady=(8,2));self.logbox=tk.Text(main,height=14,wrap='word',state='disabled',font=('Consolas',9));self.logbox.pack(fill='both',expand=True)
+        log_host=log_parent if embedded else main
+        ttk.Label(log_host,text='运行进度与记录',style='Header.TLabel' if embedded else 'TLabel').pack(anchor='w',pady=(0,5))
+        self.progress=ttk.Progressbar(log_host,mode='indeterminate');self.progress.pack(fill='x',pady=(0,8))
+        self.logbox=tk.Text(log_host,height=6 if embedded else 14,wrap='word',state='disabled',font=('Microsoft YaHei UI',10),relief='flat',borderwidth=1,padx=10,pady=8,background='#ffffff',foreground='#405249',highlightthickness=1,highlightbackground='#e2e8e3',highlightcolor='#477963');self.logbox.pack(fill='both',expand=True)
         self.root.after(100,self.poll)
+    def toggle_path_settings(self):
+        if self.path_settings.winfo_manager():
+            self.path_settings.pack_forget();self.path_toggle.configure(text='保存位置设置  ▸')
+        else:
+            self.path_settings.pack(fill='x',before=self.path_toggle);self.path_toggle.configure(text='保存位置设置  ▾')
     def log(self,text): self.q.put(('log',text))
     def open_link(self):
         lines=[x.strip() for x in self.url.get('1.0','end').splitlines() if x.strip()]
@@ -577,6 +596,7 @@ class App:
         initial=Path(self.dest.get().strip())
         path=filedialog.askopenfilename(title='选择已填写商品字段的 Excel',initialdir=str(initial if initial.exists() else Path.home()),filetypes=[('Excel 工作簿','*.xlsx *.xlsm'),('所有文件','*.*')])
         if not path:return
+        self.callback_root=self.dest.get().strip()
         self.busy=True;self.start.configure(state='disabled')
         for b in self.action_buttons:b.configure(state='disabled')
         self.progress.start(12)
@@ -592,6 +612,8 @@ class App:
             self.q.put(('sync_done',(str(root),count,str(saved_book))))
         except Exception as e:self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
     def start_pdf_regeneration(self,book_path,do_sync=True):
+        self.last_mode='pdf'
+        self.callback_root=self.dest.get().strip()
         self.busy=True;self.start.configure(state='disabled')
         for b in self.action_buttons:b.configure(state='disabled')
         self.progress.start(12)
@@ -607,6 +629,7 @@ class App:
         except Exception as e:self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
     def start_job(self,mode='all'):
         if self.busy:return
+        self.last_mode=mode
         if not self.url.get('1.0','end').strip(): messagebox.showerror('缺少链接','请输入至少一个 Yupoo 类目链接，每行一个。');return
         if mode=='all' and not self.make_xlsx.get() and not self.make_pdf.get():messagebox.showerror('未选择输出','至少选择生成 Excel 或 PDF。');return
         self.run_url=self.url.get('1.0','end').strip(); self.run_dest=self.dest.get().strip(); self.run_flags=(bool(self.make_xlsx.get()),bool(self.make_pdf.get()));self.run_force=bool(self.force_download.get())
@@ -774,14 +797,16 @@ class App:
                     self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
                     if self.embedded:
                         self.log('处理完成。')
-                        if self.on_complete:self.on_complete(self.run_dest,msg)
+                        if self.on_complete:self.on_complete(getattr(self,'callback_root',getattr(self,'run_dest',self.dest.get().strip())),msg)
                     else:messagebox.showinfo('处理完成',msg)
                 elif kind=='sync_done':
                     self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
                     root,count,book_path=msg; self.log(f'回写完成：{count} 行。')
                     if messagebox.askyesno('回写完成','Excel 字段已回写到各商品详情 TXT。\n是否立即根据所选 Excel 生成 PDF？'):
                         self.start_pdf_regeneration(Path(book_path),do_sync=False)
-                    else:messagebox.showinfo('回写完成',f'商品详情 TXT 已更新。\n{root}')
+                    else:
+                        if self.embedded and self.on_complete:self.on_complete(getattr(self,'callback_root',str(root)),f'商品详情 TXT 已回写 {count} 行。\n{book_path}')
+                        messagebox.showinfo('回写完成',f'标准档案商品详情已同步；Excel 保存在：\n{book_path}')
                 elif kind=='error':self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False;self.logbox.configure(state='normal');self.logbox.insert('end',msg+'\n');self.logbox.see('end');self.logbox.configure(state='disabled');messagebox.showerror('处理失败',msg.splitlines()[0])
         except queue.Empty:pass
         self.root.after(120,self.poll)

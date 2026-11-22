@@ -87,6 +87,8 @@ def standardize_yupoo_downloads(download_root: Path, archive_root: Path) -> list
             "unit": "pcs",
             "currency": "CNY" if details.get("单价/price(RMB)") else "",
             "unit_price": str(details.get("单价/price(RMB)") or "").strip(),
+            "cost_price": str(details.get("单价/price(RMB)") or "").strip(),
+            "wholesale_price": "",
             "moq": str(details.get("最小起定量/MOQ") or "").strip(),
             "carton_spec": str(details.get("箱规/Carton dimensions") or "").strip(),
             "units_per_carton": "",
@@ -102,6 +104,9 @@ def standardize_yupoo_downloads(download_root: Path, archive_root: Path) -> list
         for key in values:
             if str(previous.get(key) or "").strip():
                 values[key] = previous[key]
+        if previous.get("cost_price") or previous.get("unit_price"):
+            values["cost_price"] = previous.get("cost_price") or previous.get("unit_price")
+        values["unit_price"] = values.get("cost_price", "")
         values["name"] = str(previous.get("name") or values["name"])
         values["supplier_name"] = str(previous.get("supplier_name") or values["supplier_name"])
         values["field_sources"] = {**values.get("field_sources", {}), **(previous.get("field_sources") or {})}

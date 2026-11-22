@@ -22,14 +22,14 @@ SUPPORTED_EXTS = IMAGE_EXTS | VIDEO_EXTS | DOC_EXTS
 REQUIRED_PRODUCT_FIELDS = {
     "name": "产品名称",
     "supplier_name": "供应商",
-    "unit_price": "采购单价",
+    "cost_price": "成本价",
     "carton_spec": "箱规尺寸",
     "gross_weight_kg_per_carton": "单箱毛重",
 }
 
 
 def missing_product_fields(values: dict[str, Any]) -> list[str]:
-    return [label for key, label in REQUIRED_PRODUCT_FIELDS.items() if not str(values.get(key, "") or "").strip()]
+    return [label for key, label in REQUIRED_PRODUCT_FIELDS.items() if not str((values.get(key) or values.get("unit_price")) if key == "cost_price" else values.get(key, "") or "").strip()]
 
 
 def file_sha256(path: Path) -> str:
@@ -102,7 +102,9 @@ PRODUCT_COLUMN_ALIASES = {
     "supplier_sku": {"供应商型号", "供应商sku", "供应商货号", "工厂货号", "supplier sku"},
     "description": {"产品描述", "描述", "卖点", "description"}, "material": {"材质", "材料", "material"},
     "colors": {"颜色", "颜色/变体", "颜色变体", "color"}, "sizes": {"尺码", "尺寸", "规格", "size"},
-    "currency": {"币种", "货币", "价格币种", "currency"}, "unit_price": {"采购单价", "单价", "价格", "批发价", "price"},
+    "currency": {"币种", "货币", "价格币种", "currency"},
+    "cost_price": {"成本价", "采购单价", "进货价", "成本", "单价", "价格", "price", "unit price"},
+    "wholesale_price": {"批发价", "批发价格", "wholesale price", "wholesale_price"},
     "moq": {"moq", "起订量", "最小起订量", "起订"}, "unit": {"单位", "销售单位", "unit"},
     "carton_spec": {"箱规", "外箱尺寸", "包装尺寸", "箱规（长×宽×高及单位）", "carton spec", "箱规/carton dimensions", "一箱箱规/cbm"},
     "units_per_carton": {"单箱装量", "每箱数量", "装箱数", "pcs/carton"},
@@ -137,6 +139,7 @@ def read_product_rows(path: Path) -> list[dict[str, Any]]:
                 values = {key: str(row[col]).strip() for col, key in mapped.items() if col < len(row) and row[col] is not None and str(row[col]).strip()}
                 if not values.get("name"):
                     continue
+                values["unit_price"] = values.get("cost_price", values.get("unit_price", ""))
                 values["source_row"] = f"{sheet.title}!{row_idx}"
                 values["source_file"] = path.name
                 last_supplier = values.get("supplier_name", last_supplier)
@@ -212,7 +215,7 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
             # Review updates this canonical JSON in place instead of copying
             # them through a legacy staging package.
             for key in ("name", "category", "brand", "model", "sku", "supplier_name", "supplier_sku",
-                        "description", "colors", "sizes", "material", "unit", "currency", "unit_price",
+                        "description", "colors", "sizes", "material", "unit", "currency", "unit_price", "cost_price", "wholesale_price",
                         "moq", "carton_spec", "units_per_carton", "carton_quantity", "carton_volume_cbm",
                         "gross_weight_kg_per_carton", "net_weight_kg_per_carton", "lead_time", "notes"):
                 previous[key] = str(values.get(key, "") or "").strip()
@@ -298,7 +301,9 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
         "material": str(values.get("material", "")).strip(),
         "unit": str(values.get("unit", "pcs")).strip(),
         "currency": str(values.get("currency", "")).strip(),
-        "unit_price": str(values.get("unit_price", "")).strip(),
+        "unit_price": str(values.get("cost_price") or values.get("unit_price", "")).strip(),
+        "cost_price": str(values.get("cost_price") or values.get("unit_price", "")).strip(),
+        "wholesale_price": str(values.get("wholesale_price", "")).strip(),
         "moq": str(values.get("moq", "")).strip(),
         "carton_spec": str(values.get("carton_spec", "")).strip(),
         "units_per_carton": str(values.get("units_per_carton", "")).strip(),
