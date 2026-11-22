@@ -9,6 +9,7 @@ from urllib.request import Request, urlopen
 import sys
 from ca_bundle import CA_PEM
 from source_records import record_source
+from task_center import create_task, update_task
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from io import BytesIO
@@ -538,8 +539,11 @@ def load_albums_from_excel(book_path,log,image_dir):
     return result
 
 class App:
-    def __init__(self, root):
-        self.root=root;root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620);self.q=queue.Queue();self.busy=False
+    def __init__(self, root, embedded=False):
+        self.root=root
+        if not embedded:
+            root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620)
+        self.q=queue.Queue();self.busy=False
         style=ttk.Style();style.configure('TButton',padding=7);style.configure('Header.TLabel',font=('Microsoft YaHei UI',15,'bold'))
         main=ttk.Frame(root,padding=16);main.pack(fill='both',expand=True)
         ttk.Label(main,text=APP_TITLE,style='Header.TLabel').pack(anchor='w',pady=(0,12))
@@ -607,6 +611,7 @@ class App:
         if not self.url.get('1.0','end').strip(): messagebox.showerror('缺少链接','请输入至少一个 Yupoo 类目链接，每行一个。');return
         if mode=='all' and not self.make_xlsx.get() and not self.make_pdf.get():messagebox.showerror('未选择输出','至少选择生成 Excel 或 PDF。');return
         self.run_url=self.url.get('1.0','end').strip(); self.run_dest=self.dest.get().strip(); self.run_flags=(bool(self.make_xlsx.get()),bool(self.make_pdf.get()));self.run_force=bool(self.force_download.get())
+        self.task_id=create_task('download','Yupoo',self.run_url,self.run_dest)
         self.busy=True;self.start.configure(state='disabled')
         for b in self.action_buttons:b.configure(state='disabled')
         self.progress.start(12)
@@ -631,8 +636,12 @@ class App:
                 except Exception as e:
                     self.log(f'账号 {account} 处理失败：{type(e).__name__}: {e}')
                     self.log(traceback.format_exc());summaries.append(f'{account}: 失败 - {type(e).__name__}: {e}')
+            status='完成' if summaries and all('失败' not in x for x in summaries) else '部分失败'
+            update_task(self.task_id,status=status,product_count=len(urls),output_path=self.run_dest,detail='\n\n'.join(summaries))
             self.q.put(('done','\n\n'.join(summaries)))
-        except Exception as e:self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
+        except Exception as e:
+            update_task(self.task_id,status='失败',output_path=self.run_dest,detail=str(e)+'\n'+traceback.format_exc())
+            self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
     def run_account_job(self,mode,account,links):
         selected_root=Path(self.run_dest)
         root=selected_root if selected_root.name.casefold()==account.casefold() else selected_root/account

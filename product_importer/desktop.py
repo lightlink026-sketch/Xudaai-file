@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import tkinter as tk
+import uuid
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -20,6 +21,8 @@ from openpyxl.utils import get_column_letter
 from core import DOC_EXTS, IMAGE_EXTS, REQUIRED_PRODUCT_FIELDS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, missing_product_fields, read_product_rows, read_text, scan_product_folder
 from source_records import delete_source_records, query_sources, record_source
 from yupoo_tool import App as YupooApp
+from task_center import create_task, update_task, list_tasks, delete_tasks
+from opencli_adapter import download_1688
 
 APP_TITLE = "Xudaai 产品资料整理工具"
 CONFIG_PATH = Path.home() / ".xudaai-product-importer.json"
@@ -71,11 +74,15 @@ class ProductImporter(tk.Tk):
     def _build(self) -> None:
         menubar = tk.Menu(self)
         source_menu = tk.Menu(menubar, tearoff=False)
-        source_menu.add_command(label="Yupoo 链接下载 / Excel / PDF", command=self._open_yupoo_tool)
+        source_menu.add_command(label="又拍采集", command=lambda: self._show_collector_page("yupoo"))
+        source_menu.add_command(label="1688 链接采集", command=lambda: self._show_collector_page("1688"))
+        source_menu.add_separator()
         source_menu.add_command(label="导入 1688 / OpenCLI Excel", command=self._choose_excel)
         source_menu.add_command(label="导入人工整理资料文件夹", command=self._choose_source)
         menubar.add_cascade(label="采集与导入", menu=source_menu)
         records_menu = tk.Menu(menubar, tearoff=False)
+        records_menu.add_command(label="下载与上传任务中心…", command=self._open_task_center)
+        records_menu.add_separator()
         records_menu.add_command(label="查询 / 删除下载与导入记录…", command=self._open_source_records)
         menubar.add_cascade(label="资料记录", menu=records_menu)
         ai_menu = tk.Menu(menubar, tearoff=False)
@@ -111,6 +118,20 @@ class ProductImporter(tk.Tk):
         workflow.pack(fill="both", expand=True, pady=4)
         product_page_host = ttk.Frame(workflow)
         workflow.add(product_page_host, text="1 资料导入与产品整理")
+        self.collector_page = ttk.Frame(workflow, padding=10)
+        workflow.add(self.collector_page, text="采集器")
+        self.collector_tabs = ttk.Notebook(self.collector_page)
+        self.collector_tabs.pack(fill="both", expand=True)
+        self.yupoo_page = ttk.Frame(self.collector_tabs)
+        self.collector_tabs.add(self.yupoo_page, text="又拍采集器")
+        self.yupoo_app = YupooApp(self.yupoo_page, embedded=True)
+        cli_page = ttk.Frame(self.collector_tabs, padding=18)
+        self.collector_tabs.add(cli_page, text="1688 / OpenCLI")
+        ttk.Label(cli_page, text="粘贴 1688 商品链接，软件会调用本机 OpenCLIApp 获取商品资料和下载素材，并生成标准产品档案。", wraplength=900).pack(anchor="w", pady=(0, 10))
+        self.opencli_url_var = tk.StringVar()
+        ttk.Entry(cli_page, textvariable=self.opencli_url_var).pack(fill="x", pady=(0, 8))
+        ttk.Button(cli_page, text="下载并生成标准档案", command=self._start_1688_download).pack(anchor="w")
+        ttk.Label(cli_page, text="也可以直接在 AI 对话框粘贴 1688 链接。下载记录和上传记录统一在“任务中心”查询。", foreground="#68736b", wraplength=900).pack(anchor="w", pady=10)
         product_canvas = tk.Canvas(product_page_host, highlightthickness=0, borderwidth=0)
         product_scroll = ttk.Scrollbar(product_page_host, orient="vertical", command=product_canvas.yview)
         product_canvas.configure(yscrollcommand=product_scroll.set)
@@ -228,11 +249,44 @@ class ProductImporter(tk.Tk):
         self.bind_all("<Button-5>", self._product_mousewheel)
 
     def _open_yupoo_tool(self) -> None:
+        self._show_collector_page("yupoo")
+
+    def _show_collector_page(self, collector: str) -> None:
+        self.workflow.select(self.collector_page)
+        self.collector_tabs.select(self.yupoo_page if collector == "yupoo" else 1)
+
+    def _start_1688_download(self, url: str | None = None) -> None:
+        link = (url or self.opencli_url_var.get()).strip()
+        if not link:
+            messagebox.showinfo(APP_TITLE, "请粘贴一个 1688 商品链接。")
+            return
+        if not url:
+            self.opencli_url_var.set(link)
+        output = Path(self.output_var.get().strip() or (Path.home() / "Documents" / "Xudaai产品档案"))
+        task_id = create_task("download", "1688/OpenCLI", link, str(output))
+        self.status_var.set("正在调用本机 OpenCLI 读取 1688 商品并下载素材…")
+        threading.Thread(target=self._run_1688_download, args=(task_id, link, output), daemon=True).start()
+
+    def _run_1688_download(self, task_id: str, link: str, output: Path) -> None:
         try:
-            window = tk.Toplevel(self)
-            YupooApp(window)
+            result = download_1688(link, output)
+            path = Path(result["product_dir"])
+            record_source("1688/OpenCLI", result["supplier"], result["title"], str(path), link, "待补资料", ["箱规尺寸", "单箱毛重"])
+            update_task(task_id, status="待复核", supplier=result["supplier"], product_count=1, output_path=str(path), detail="已下载并生成标准档案；请在产品复核中核对价格、箱规和重量。")
+            self.after(0, lambda: self._1688_download_finished(result))
         except Exception as exc:
-            messagebox.showerror(APP_TITLE, f"打开 Yupoo 功能窗口失败：\n{exc}")
+            update_task(task_id, status="失败", output_path=str(output), detail=str(exc))
+            self.after(0, lambda error=str(exc): self._1688_download_failed(error))
+
+    def _1688_download_finished(self, result: dict[str, Any]) -> None:
+        self.source_var.set(str(Path(result["product_dir"]).parent))
+        self.status_var.set(f"1688 素材采集完成：{result['title']}；正在建立统一产品复核清单…")
+        self._append_chat_display("助手", f"已采集 1688 商品：{result['title']}\n供应商：{result['supplier']}\n我正在把采集结果加入统一产品清单。接下来可在产品复核中检查字段、补齐箱规和重量，再生成标准档案。")
+        self._scan()
+
+    def _1688_download_failed(self, error: str) -> None:
+        self.status_var.set("1688 采集失败；可在任务中心查看错误后重试。")
+        self._append_chat_display("系统", f"OpenCLI 采集失败：{error}")
 
     def _show_ai_page(self) -> None:
         if hasattr(self, "ai_page"):
@@ -350,6 +404,57 @@ class ProductImporter(tk.Tk):
         ttk.Button(toolbar, text="搜索", command=lambda: refresh(True)).pack(side="left")
         ttk.Button(toolbar, text="刷新", command=lambda: refresh()).pack(side="left", padx=5)
         ttk.Button(toolbar, text="补录已有 Yupoo 下载", command=import_existing_yupoo).pack(side="left", padx=5)
+
+    def _open_task_center(self) -> None:
+        window = tk.Toplevel(self)
+        window.title("下载与上传任务中心")
+        window.geometry("1180x680")
+        window.minsize(900, 500)
+        frame = ttk.Frame(window, padding=12); frame.pack(fill="both", expand=True)
+        ttk.Label(frame, text="任务中心", font=("Microsoft YaHei UI", 16, "bold")).pack(anchor="w")
+        ttk.Label(frame, text="下载与导入任务、上传任务分开展示；删除任务记录不会删除本地产品档案。", foreground="#68736b").pack(anchor="w", pady=(3, 10))
+        tabs = ttk.Notebook(frame); tabs.pack(fill="both", expand=True)
+        views = {}
+        for task_type, title in (("download", "下载与导入"), ("upload", "上传到 Xudaai")):
+            page = ttk.Frame(tabs, padding=8); tabs.add(page, text=title)
+            search = tk.StringVar(); toolbar = ttk.Frame(page); toolbar.pack(fill="x", pady=(0, 8))
+            ttk.Entry(toolbar, textvariable=search, width=42).pack(side="left")
+            tree = ttk.Treeview(page, columns=("time", "source", "supplier", "summary", "count", "status", "path"), show="headings", selectmode="extended", height=18)
+            for key, label, width in (("time","时间",145),("source","来源",125),("supplier","供应商",150),("summary","任务",260),("count","产品数",75),("status","状态",100),("path","输出位置/详情",360)):
+                tree.heading(key,text=label); tree.column(key,width=width,minwidth=70,stretch=key in {"summary","path"})
+            tree.pack(fill="both",expand=True)
+            footer=ttk.Frame(page); footer.pack(fill="x",pady=(8,0)); state={"page":1,"total":0,"rows":[]}
+            label=ttk.Label(footer,text=""); label.pack(side="left")
+            def refresh(st=state,tr=tree,q=search,typ=task_type,lab=label):
+                rows,total=list_tasks(typ,q.get(),st["page"],25); st["rows"]=rows;st["total"]=total
+                tr.delete(*tr.get_children())
+                for row in rows: tr.insert("","end",iid=row["task_id"],values=(row["created_at"],row["source_type"],row["supplier"],row["summary"],row["product_count"],row["status"],row["output_path"] or row["detail"][:180]))
+                pages=max(1,(total+24)//25);st["page"]=min(st["page"],pages);lab.configure(text=f"第 {st['page']} / {pages} 页 · 共 {total} 条")
+            ttk.Button(toolbar,text="查询",command=refresh).pack(side="left",padx=6)
+            ttk.Button(footer,text="上一页",command=lambda st=state,rf=refresh:(st.update(page=max(1,st['page']-1)),rf())).pack(side="right")
+            ttk.Button(footer,text="下一页",command=lambda st=state,rf=refresh:(st.update(page=st['page']+1),rf())).pack(side="right",padx=6)
+            def delete_selected(tr=tree,rf=refresh):
+                ids=list(tr.selection())
+                if ids and messagebox.askyesno("删除任务记录",f"删除选中的 {len(ids)} 条任务记录？本地档案和源文件不会删除。",parent=window): delete_tasks(ids);rf()
+            ttk.Button(footer,text="删除选中记录",command=delete_selected).pack(side="right",padx=6)
+            def open_output(tr=tree,st=state):
+                selection=tr.selection()
+                row=next((r for r in st["rows"] if selection and r["task_id"]==selection[0]),None)
+                path=Path(row["output_path"]) if row and row["output_path"] else None
+                if path and path.exists():os.startfile(str(path if path.is_dir() else path.parent))
+                else:messagebox.showinfo("打开目录","该任务没有可用的本地输出位置。",parent=window)
+            ttk.Button(footer,text="打开输出目录",command=open_output).pack(side="right",padx=6)
+            if task_type == "download":
+                def retry_selected(tr=tree,st=state):
+                    selection=tr.selection()
+                    row=next((r for r in st["rows"] if selection and r["task_id"]==selection[0]),None)
+                    if not row:return
+                    if row["source_type"]=="1688/OpenCLI":self._start_1688_download(row["summary"])
+                    elif row["source_type"]=="Yupoo":
+                        self._show_collector_page("yupoo");self.yupoo_app.url.delete("1.0","end");self.yupoo_app.url.insert("1.0",row["summary"]);self.yupoo_app.start_job("all")
+                ttk.Button(footer,text="重试选中下载",command=retry_selected).pack(side="right",padx=6)
+            search.trace_add("write",lambda *_args,st=state,rf=refresh:(st.update(page=1),rf()))
+            views[task_type]=refresh;refresh()
         search.bind("<Return>", lambda _event: refresh(True))
         refresh()
 
@@ -460,11 +565,25 @@ class ProductImporter(tk.Tk):
     def _ai_chat_send(self) -> None:
         if self.ai_chat_busy:
             return
-        if not self.info:
-            messagebox.showinfo(APP_TITLE, "请先选择并扫描产品文件夹，再开始 AI 整理对话。")
-            return
         text = self.chat_input.get("1.0", "end").strip()
         if not text:
+            return
+        links = re.findall(r"https?://[^\s<>]+", text)
+        link_1688 = next((link.rstrip("，。；,.)") for link in links if re.search(r"1688\.com", link, re.I)), "")
+        link_yupoo = next((link.rstrip("，。；,.)") for link in links if re.search(r"yupoo\.com", link, re.I)), "")
+        if link_1688 or link_yupoo:
+            self.chat_input.delete("1.0", "end")
+            self._append_chat_display("你", text)
+            if link_1688:
+                self._append_chat_display("助手", "识别到 1688 链接，正在调用本机 OpenCLI 采集商品信息和素材…")
+                self._start_1688_download(link_1688)
+            else:
+                self._append_chat_display("助手", "识别到 Yupoo 链接，正在打开内置又拍采集器并填入链接。请点击下载开始任务。")
+                self._show_collector_page("yupoo")
+                self.yupoo_app.url.delete("1.0", "end"); self.yupoo_app.url.insert("1.0", link_yupoo)
+            return
+        if not self.info:
+            messagebox.showinfo(APP_TITLE, "请先采集/导入并选择产品，或在对话框粘贴 Yupoo / 1688 链接开始采集。")
             return
         api_url, model, key = self.ai_url_var.get().strip(), self.ai_model_var.get().strip(), self.ai_key_var.get().strip()
         if not api_url or not model or not key:
@@ -737,6 +856,27 @@ class ProductImporter(tk.Tk):
             messagebox.showerror(APP_TITLE, error)
             return
         self.batch_products = batch or []
+        for item in self.batch_products:
+            values = item.setdefault("values", {})
+            for source_file in item.get("info", {}).get("files", []):
+                if source_file.name == "1688商品信息.json":
+                    try:
+                        detail = json.loads(source_file.read_text(encoding="utf-8"))
+                        item["source_type"] = "1688/OpenCLI"
+                        item["source_url"] = str(detail.get("_source_url", ""))
+                        item["source_product_id"] = str(detail.get("offer_id", ""))
+                        values.setdefault("name", str(detail.get("title", item.get("name", ""))))
+                        values.setdefault("supplier_name", str(detail.get("seller_name", item.get("supplier_name", ""))))
+                        price = str(detail.get("price_text") or detail.get("price") or "")
+                        price_match = re.search(r"\d+(?:\.\d+)?", price)
+                        if price_match: values.setdefault("unit_price", price_match.group(0)); values.setdefault("currency", "CNY")
+                        values.setdefault("moq", str(detail.get("moq_text") or detail.get("moq") or ""))
+                        values.setdefault("supplier_sku", str(detail.get("offer_id") or ""))
+                        values.setdefault("field_sources", {key: "OpenCLI 1688 商品详情" for key in ("name","supplier_name","unit_price","moq","supplier_sku") if values.get(key)})
+                    except (OSError, ValueError, TypeError):
+                        pass
+            values.setdefault("product_id", str(uuid.uuid4()))
+            values.setdefault("product_code", f"P-{__import__('datetime').date.today():%Y%m%d}-{uuid.uuid4().hex[:8].upper()}")
         self.active_product_index = None
         self._record_batch_sources(self.batch_products)
         self._refresh_batch_tree()
@@ -754,8 +894,10 @@ class ProductImporter(tk.Tk):
             info = item.get("info", {})
             folder = Path(info.get("folder", ""))
             source_type = "人工资料文件夹"
-            source_url = ""
+            source_url = str(item.get("source_url", ""))
             info_path = folder / "info.json"
+            if any(path.name == "1688商品信息.json" for path in info.get("files", [])):
+                source_type = "1688/OpenCLI"
             if info_path.is_file():
                 try:
                     album = json.loads(info_path.read_text(encoding="utf-8"))
@@ -860,6 +1002,8 @@ class ProductImporter(tk.Tk):
             return
         values = {"name": info["folder_name"], "supplier_name": Path(folder).parent.name}
         item = {"supplier_name": values["supplier_name"], "name": values["name"], "source_label": str(folder), "info": info, "values": values, "main_image": info["images"][0].relative_to(Path(info["folder"])).as_posix() if info["images"] else ""}
+        item["values"].setdefault("product_id", str(uuid.uuid4()))
+        item["values"].setdefault("product_code", f"P-{__import__('datetime').date.today():%Y%m%d}-{uuid.uuid4().hex[:8].upper()}")
         self._save_active_product()
         self.batch_products.append(item)
         index = len(self.batch_products) - 1
@@ -1038,6 +1182,9 @@ class ProductImporter(tk.Tk):
             for item in self.batch_products:
                 values = dict(item.get("values", {}))
                 values.setdefault("supplier_name", item.get("supplier_name", ""))
+                values.setdefault("source_type", item.get("source_type", ""))
+                values.setdefault("source_url", item.get("source_url", ""))
+                values.setdefault("source_product_id", item.get("source_product_id", ""))
                 info = item["info"]
                 source = Path(info["folder"])
                 excel_value = item.get("excel_source_path") or self.excel_var.get().strip()
@@ -1076,6 +1223,8 @@ class ProductImporter(tk.Tk):
             return
         if not messagebox.askyesno(APP_TITLE, f"确认将本批 {len(self.generated_packages)} 个产品档案上传并建立索引？"):
             return
+        self.upload_task_id = create_task("upload", "Xudaai", f"上传 {len(self.generated_packages)} 个产品", self.output_var.get().strip())
+        update_task(self.upload_task_id, status="上传中", product_count=len(self.generated_packages), output_path=self.output_var.get().strip())
         self.status_var.set("正在上传文件并建立索引，请稍候…")
         threading.Thread(target=self._run_upload, daemon=True).start()
 
@@ -1114,6 +1263,9 @@ class ProductImporter(tk.Tk):
         ok = [item for item in results if item.get("ok")]
         failed = [item for item in results if not item.get("ok")]
         self.status_var.set(f"批次上传完成：成功 {len(ok)} 款，失败 {len(failed)} 款；共索引 {sum(int(item.get('indexed', 0)) for item in ok)} 个文件。")
+        task_id = getattr(self, "upload_task_id", "")
+        if task_id:
+            update_task(task_id, status=f"完成：成功 {len(ok)} / 失败 {len(failed)}", product_count=len(results), output_path=self.output_var.get().strip(), detail="\n".join(f"{item.get('name','')}: {item.get('error','成功')}" for item in results))
         details = "\n".join(("✓ " if item.get("ok") else "✗ ") + str(item.get("name", "")) + (f" · {item.get('error')}" if not item.get("ok") else "") for item in results[:30])
         messagebox.showinfo(APP_TITLE, self.status_var.get() + ("\n\n" + details if details else ""))
 

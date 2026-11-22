@@ -207,7 +207,15 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
     supplier_root = output_root / safe_stem(supplier_name) if supplier_name else output_root
     destination = supplier_root / f"{product_code}-{safe_stem(product_name)}"
     if destination.exists():
-        raise FileExistsError(f"输出目录已存在：{destination}")
+        manifest_path = destination / "产品档案.json"
+        try:
+            previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            previous = {}
+        if previous.get("product_id") != product_id:
+            raise FileExistsError(f"输出目录已存在且不属于当前产品，未覆盖：{destination}")
+        # Replace only an archive created for this same stable product ID.
+        shutil.rmtree(destination)
     images_dir = destination / "图片"
     gallery_dir = images_dir / "副图"
     videos_dir = destination / "视频"
@@ -279,6 +287,10 @@ def make_product_package(info: dict[str, Any], extra_excel: Path | None, output_
         "lead_time": str(values.get("lead_time", "")).strip(),
         "notes": str(values.get("notes", "")).strip(),
         "field_sources": values.get("field_sources", {}),
+        "source_type": str(values.get("source_type", "")).strip(),
+        "source_url": str(values.get("source_url", "")).strip(),
+        "source_product_id": str(values.get("source_product_id", "")).strip(),
+        "updated_at": __import__("datetime").datetime.now().isoformat(timespec="seconds"),
         "review_status": "needs_info" if missing_fields else "ready_for_review",
         "missing_fields": missing_fields,
         "source_folder_name": source_root.name,
