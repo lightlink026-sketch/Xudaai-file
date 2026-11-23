@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ctypes, json, mimetypes, os, queue, re, shutil, threading, tkinter as tk, urllib.request, uuid
+import base64
+from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk, simpledialog
@@ -22,6 +24,42 @@ FIELDS = [
 def cfg_read():
     try: return json.loads(CONFIG.read_text(encoding="utf-8"))
     except Exception: return {}
+
+class _DataBlob(ctypes.Structure):
+    _fields_=[("cbData",wintypes.DWORD),("pbData",ctypes.POINTER(ctypes.c_byte))]
+
+def protect_local_secret(value):
+    """Encrypt a secret for the current Windows account with DPAPI."""
+    if not value:return ""
+    if os.name!="nt":raise RuntimeError("API Key 本地加密保存需要 Windows DPAPI。")
+    raw=value.encode("utf-8");buffer=ctypes.create_string_buffer(raw)
+    source=_DataBlob(len(raw),ctypes.cast(buffer,ctypes.POINTER(ctypes.c_byte)));target=_DataBlob()
+    crypt32=ctypes.WinDLL("crypt32",use_last_error=True);kernel32=ctypes.WinDLL("kernel32",use_last_error=True)
+    crypt32.CryptProtectData.argtypes=[ctypes.POINTER(_DataBlob),wintypes.LPCWSTR,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(_DataBlob)]
+    crypt32.CryptProtectData.restype=wintypes.BOOL
+    kernel32.LocalFree.argtypes=[ctypes.c_void_p];kernel32.LocalFree.restype=ctypes.c_void_p
+    if not crypt32.CryptProtectData(ctypes.byref(source),"Xudaai Product Archivist API Key",None,None,None,1,ctypes.byref(target)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:return "dpapi:"+base64.b64encode(ctypes.string_at(target.pbData,target.cbData)).decode("ascii")
+    finally:kernel32.LocalFree(target.pbData)
+
+def unprotect_local_secret(value):
+    """Decrypt a DPAPI secret that is bound to the current Windows account."""
+    if not value:return ""
+    if not str(value).startswith("dpapi:"):return ""
+    if os.name!="nt":return ""
+    raw=base64.b64decode(str(value).split(":",1)[1]);buffer=ctypes.create_string_buffer(raw)
+    source=_DataBlob(len(raw),ctypes.cast(buffer,ctypes.POINTER(ctypes.c_byte)));target=_DataBlob();description=wintypes.LPWSTR()
+    crypt32=ctypes.WinDLL("crypt32",use_last_error=True);kernel32=ctypes.WinDLL("kernel32",use_last_error=True)
+    crypt32.CryptUnprotectData.argtypes=[ctypes.POINTER(_DataBlob),ctypes.POINTER(wintypes.LPWSTR),ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(_DataBlob)]
+    crypt32.CryptUnprotectData.restype=wintypes.BOOL
+    kernel32.LocalFree.argtypes=[ctypes.c_void_p];kernel32.LocalFree.restype=ctypes.c_void_p
+    if not crypt32.CryptUnprotectData(ctypes.byref(source),ctypes.byref(description),None,None,None,1,ctypes.byref(target)):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:return ctypes.string_at(target.pbData,target.cbData).decode("utf-8")
+    finally:
+        kernel32.LocalFree(target.pbData)
+        if description:kernel32.LocalFree(description)
 
 def set_windows_dpi_awareness():
     """Let Tk draw at the monitor's native DPI instead of bitmap scaling."""
@@ -47,6 +85,7 @@ class Workbench(tk.Tk):
         self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue();self.ai_profiles=self.cfg.get("ai_profiles",[]);self.current_profile=self.cfg.get("active_ai_profile","");self.ai_key=tk.StringVar(value="")
         self.conversations={"新对话":[]};self.conversation_logs={"新对话":[]};self.current_conversation="新对话";self.ai_history=self.conversations[self.current_conversation]
         self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.cli_executable=tk.StringVar(value=self.cfg.get("opencli_path",""));self.current_module="采集与导入";self.active_task=None
+        self._restore_local_api_key()
         self._style(); self._layout(); self.show("采集与导入")
 
     def _style(self):
@@ -229,10 +268,42 @@ class Workbench(tk.Tk):
         name=self.model_var.get()
         profile=next((x for x in self.ai_profiles if x.get("name")==name),None)
         if not profile:return
+        if self.current_profile and self.current_profile!=name and self.ai_key.get().strip():
+            try:self._persist_local_api_key()
+            except Exception as e:
+                self.model_var.set(self.current_profile);return messagebox.showerror(APP_NAME,f"无法加密保存当前 API Key：{e}")
         self.current_profile=name;self.ai_url.set(profile.get("api_url",self.ai_url.get()));self.ai_model.set(profile.get("model", ""))
+        try:self.ai_key.set(unprotect_local_secret(profile.get("api_key_protected", "")))
+        except Exception as e:
+            self.ai_key.set("");self.status.set(f"无法读取此模型的本地 API Key：{e}")
+        self.cfg.pop("ai_key_protected",None)
         self.cfg["active_ai_profile"]=name;self.cfg["ai_url"]=self.ai_url.get();self.cfg["ai_model"]=self.ai_model.get()
         CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
-        if hasattr(self,"status"):self.status.set(f"已选择 AI 模型：{name}；请在设置中填入本次运行的 API Key。")
+        if hasattr(self,"status"):self.status.set(f"已选择 AI 模型：{name}；本地密钥{'已加载' if self.ai_key.get() else '尚未配置'}。")
+
+    def _restore_local_api_key(self):
+        profile=next((x for x in self.ai_profiles if x.get("name")==self.current_profile),None)
+        protected=(profile or {}).get("api_key_protected") or self.cfg.get("ai_key_protected","")
+        try:key=unprotect_local_secret(protected)
+        except Exception:key=""
+        self.ai_key.set(key)
+        # Migrate an older app-level local key into the active model profile.
+        if key and profile and not profile.get("api_key_protected"):
+            profile["api_key_protected"]=protect_local_secret(key)
+            self.cfg["ai_profiles"]=self.ai_profiles
+            CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+
+    def _persist_local_api_key(self,*,clear_if_empty=False):
+        key=self.ai_key.get().strip()
+        profile=next((x for x in self.ai_profiles if x.get("name")==self.current_profile),None)
+        if key:
+            protected=protect_local_secret(key)
+            self.cfg["ai_key_protected"]=protected
+            if profile:profile["api_key_protected"]=protected
+        elif clear_if_empty:
+            self.cfg.pop("ai_key_protected",None)
+            if profile:profile.pop("api_key_protected",None)
+        self.cfg["ai_profiles"]=self.ai_profiles
 
     def _save_ai_profiles(self):
         self.cfg["ai_profiles"]=self.ai_profiles;self.cfg["active_ai_profile"]=self.current_profile
@@ -250,6 +321,7 @@ class Workbench(tk.Tk):
         self.profile_values["name"].set((profile or {}).get("name",""))
         self.profile_values["api_url"].set((profile or {}).get("api_url",self.ai_url.get()))
         self.profile_values["model"].set((profile or {}).get("model",self.ai_model.get()))
+        self.profile_values["api_key"].set("")
         self.profile_error.set("")
         self.profile_editor.pack(fill="x",pady=(10,0))
         self.profile_editor.winfo_toplevel().update_idletasks()
@@ -259,9 +331,18 @@ class Workbench(tk.Tk):
         if not (name and api and model):return self.profile_error.set("请填写模型名称、API 地址和模型 ID。")
         if any(x.get("name")==name and x is not self.editing_profile for x in self.ai_profiles):return self.profile_error.set("模型名称已存在，请换一个名称。")
         record={"name":name,"api_url":api,"model":model}
+        edited_key=self.profile_values["api_key"].get().strip()
+        if edited_key:record["api_key_protected"]=protect_local_secret(edited_key)
+        elif self.editing_profile and self.editing_profile.get("api_key_protected"):record["api_key_protected"]=self.editing_profile["api_key_protected"]
         if self.editing_profile:self.ai_profiles[self.ai_profiles.index(self.editing_profile)]=record
         else:self.ai_profiles.append(record)
-        self.current_profile=name;self.ai_url.set(api);self.ai_model.set(model);self.model_var.set(name);self._save_ai_profiles()
+        self.current_profile=name;self.ai_url.set(api);self.ai_model.set(model);self.model_var.set(name)
+        try:self.ai_key.set(unprotect_local_secret(record.get("api_key_protected","")))
+        except Exception:self.ai_key.set("")
+        self._save_ai_profiles()
+        if record.get("api_key_protected"):self.cfg["ai_key_protected"]=record["api_key_protected"]
+        else:self.cfg.pop("ai_key_protected",None)
+        CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
         self.profile_editor.pack_forget()
 
     def _cancel_ai_profile_edit(self):
@@ -282,7 +363,7 @@ class Workbench(tk.Tk):
         profile=self.ai_profiles[selected[0]]
         if messagebox.askyesno(APP_NAME,f"删除模型配置“{profile['name']}”？"):
             self.ai_profiles.pop(selected[0])
-            if self.current_profile==profile["name"]:self.current_profile="";self.ai_model.set("")
+            if self.current_profile==profile["name"]:self.current_profile="";self.ai_model.set("");self.ai_key.set("");self.cfg.pop("ai_key_protected",None)
             self._save_ai_profiles()
 
     def _send_ai_suggestion(self,text):
@@ -1141,7 +1222,7 @@ class Workbench(tk.Tk):
     def _ai_request(self,prompt,context,callback):
         api=self.ai_url.get().strip() if hasattr(self,"ai_url") else self.cfg.get("ai_url","");model=self.ai_model.get().strip() if hasattr(self,"ai_model") else self.cfg.get("ai_model","");key=self.ai_key.get().strip() if hasattr(self,"ai_key") else ""
         if not (api and model and key):
-            self._chat_line("系统","请先到‘设置’配置 AI API 地址、模型名称和 API Key。API Key 仅保存在本次运行内存中。")
+            self._chat_line("系统","请先到‘设置’配置 AI API 地址、模型名称和 API Key，再点击‘保存当前连接’；密钥会加密保存在本机。")
             return
         self.status.set("AI 正在分析请求…")
         def work():
@@ -1317,11 +1398,11 @@ class Workbench(tk.Tk):
         for name,button in buttons.items():button.configure(style="SegmentActive.TButton" if name==kind else "Segment.TButton")
 
     def build_settings(self,p):
-        c=self._card(p,"AI 当前连接","选择一个已保存的模型配置。API Key 仅在本次软件运行期间保存在内存中。")
-        for label,var,secret in (("API 地址",self.ai_url,False),("模型 ID",self.ai_model,False),("API Key（本次运行）",self.ai_key,True)):
+        c=self._card(p,"AI 当前连接","API Key 会使用 Windows 用户级加密保存在本机，不会上传或写入模型名称配置。")
+        for label,var,secret in (("API 地址",self.ai_url,False),("模型 ID",self.ai_model,False),("API Key（本机加密保存）",self.ai_key,True)):
             row=ttk.Frame(c,style="Card.TFrame");row.pack(fill="x",pady=5);ttk.Label(row,text=label,width=22,background="white").pack(side="left");ttk.Entry(row,textvariable=var,show="•" if secret else "").pack(side="left",fill="x",expand=True)
         ttk.Button(c,text="保存当前连接",style="Accent.TButton",command=self.save_settings).pack(anchor="e",pady=8)
-        profiles=self._card(p,"模型配置管理","可新增、修改、删除并切换 API 地址与模型。密钥不会写入配置文件。")
+        profiles=self._card(p,"模型配置管理","可新增、修改、删除并切换 API 地址、模型和各自的本地加密密钥。")
         self.profile_list=tk.Listbox(profiles,height=5,activestyle="none",font=("Microsoft YaHei UI",11),relief="flat",highlightthickness=1,highlightbackground=self.ui["line"],background="white",foreground=self.ui["ink"],selectbackground=self.ui["green_soft"],selectforeground=self.ui["ink"]);self.profile_list.pack(fill="x",pady=(0,8))
         actions=ttk.Frame(profiles,style="Card.TFrame");actions.pack(fill="x")
         ttk.Button(actions,text="新增模型",command=self.add_ai_profile).pack(side="left")
@@ -1335,7 +1416,11 @@ class Workbench(tk.Tk):
             row=ttk.Frame(self.profile_editor,style="Card.TFrame");row.pack(fill="x",pady=3)
             ttk.Label(row,text=label,width=14,background="white").pack(side="left")
             ttk.Entry(row,textvariable=self.profile_values[key],style="Compact.TEntry").pack(side="left",fill="x",expand=True)
-        ttk.Label(self.profile_editor,text="API Key 在上方填写，仅保存在本次软件运行期间。",style="CardHint.TLabel").pack(anchor="w",pady=(3,0))
+        self.profile_values["api_key"]=tk.StringVar()
+        key_row=ttk.Frame(self.profile_editor,style="Card.TFrame");key_row.pack(fill="x",pady=3)
+        ttk.Label(key_row,text="API Key",width=14,background="white").pack(side="left")
+        ttk.Entry(key_row,textvariable=self.profile_values["api_key"],show="•",style="Compact.TEntry").pack(side="left",fill="x",expand=True)
+        ttk.Label(self.profile_editor,text="留空会保留该模型已有密钥；新密钥会加密保存在本机。",style="CardHint.TLabel").pack(anchor="w",pady=(3,0))
         self.profile_error=tk.StringVar(value="")
         ttk.Label(self.profile_editor,textvariable=self.profile_error,foreground="#b42318",background="white").pack(anchor="w",pady=(3,0))
         editor_actions=ttk.Frame(self.profile_editor,style="Card.TFrame");editor_actions.pack(fill="x",pady=(6,0))
@@ -1344,9 +1429,11 @@ class Workbench(tk.Tk):
         self._save_ai_profiles()
 
     def save_settings(self):
+        try:self._persist_local_api_key(clear_if_empty=True)
+        except Exception as e:return messagebox.showerror(APP_NAME,f"无法加密保存 API Key：{e}")
         self.cfg.update(output=self.out_var.get() if hasattr(self,"out_var") else str(self.output),server=self.server.get() if hasattr(self,"server") else "http://127.0.0.1:8002",user=self.user.get() if hasattr(self,"user") else "admin",ai_url=self.ai_url.get(),ai_model=self.ai_model.get(),ai_profiles=self.ai_profiles,active_ai_profile=self.current_profile)
         self.output=Path(self.cfg["output"]);CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
         if hasattr(self,"archive_location"):self.archive_location.set(str(self.output))
-        self.status.set("设置已保存；API Key 不会写入磁盘。")
+        self.status.set("设置已保存；API Key 已加密保存在本机。")
 
 if __name__=="__main__":Workbench().mainloop()
