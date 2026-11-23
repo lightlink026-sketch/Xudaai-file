@@ -245,22 +245,29 @@ class Workbench(tk.Tk):
             for profile in self.ai_profiles:self.profile_list.insert("end",f"{profile['name']}  ·  {profile.get('model','')}  ·  {profile.get('api_url','')}")
 
     def _edit_ai_profile(self,profile=None):
-        dialog=tk.Toplevel(self);dialog.title("修改 AI 模型" if profile else "新增 AI 模型");dialog.transient(self);dialog.grab_set();dialog.geometry("560x250")
-        values={"name":tk.StringVar(value=(profile or {}).get("name","")),"api_url":tk.StringVar(value=(profile or {}).get("api_url",self.ai_url.get())),"model":tk.StringVar(value=(profile or {}).get("model",self.ai_model.get()))}
-        form=ttk.Frame(dialog,padding=18);form.pack(fill="both",expand=True)
-        for key,label in (("name","配置名称"),("api_url","API 地址"),("model","模型 ID")):
-            row=ttk.Frame(form);row.pack(fill="x",pady=5);ttk.Label(row,text=label,width=12).pack(side="left");ttk.Entry(row,textvariable=values[key]).pack(side="left",fill="x",expand=True)
-        ttk.Label(form,text="API Key 在设置页填写，仅保存在本次运行内存。",style="Muted.TLabel").pack(anchor="w",pady=(4,8))
-        def save():
-            name=values["name"].get().strip();api=values["api_url"].get().strip();model=values["model"].get().strip()
-            if not (name and api and model):return messagebox.showinfo(APP_NAME,"请填写配置名称、API 地址和模型 ID。",parent=dialog)
-            if any(x.get("name")==name and x is not profile for x in self.ai_profiles):return messagebox.showinfo(APP_NAME,"配置名称已存在。",parent=dialog)
-            record={"name":name,"api_url":api,"model":model}
-            if profile:self.ai_profiles[self.ai_profiles.index(profile)]=record
-            else:self.ai_profiles.append(record)
-            self.current_profile=name;self.ai_url.set(api);self.ai_model.set(model);self.model_var.set(name);self._save_ai_profiles()
-            dialog.destroy()
-        buttons=ttk.Frame(form);buttons.pack(fill="x");ttk.Button(buttons,text="保存",style="Accent.TButton",command=save).pack(side="right");ttk.Button(buttons,text="取消",command=dialog.destroy).pack(side="right",padx=6)
+        if not hasattr(self,"profile_editor"):return
+        self.editing_profile=profile
+        self.profile_editor_title.set("修改模型" if profile else "新增模型")
+        self.profile_values["name"].set((profile or {}).get("name",""))
+        self.profile_values["api_url"].set((profile or {}).get("api_url",self.ai_url.get()))
+        self.profile_values["model"].set((profile or {}).get("model",self.ai_model.get()))
+        self.profile_error.set("")
+        self.profile_editor.pack(fill="x",pady=(10,0))
+        self.profile_editor.winfo_toplevel().update_idletasks()
+
+    def _save_ai_profile_editor(self):
+        name=self.profile_values["name"].get().strip();api=self.profile_values["api_url"].get().strip();model=self.profile_values["model"].get().strip()
+        if not (name and api and model):return self.profile_error.set("请填写模型名称、API 地址和模型 ID。")
+        if any(x.get("name")==name and x is not self.editing_profile for x in self.ai_profiles):return self.profile_error.set("模型名称已存在，请换一个名称。")
+        record={"name":name,"api_url":api,"model":model}
+        if self.editing_profile:self.ai_profiles[self.ai_profiles.index(self.editing_profile)]=record
+        else:self.ai_profiles.append(record)
+        self.current_profile=name;self.ai_url.set(api);self.ai_model.set(model);self.model_var.set(name);self._save_ai_profiles()
+        self.profile_editor.pack_forget()
+
+    def _cancel_ai_profile_edit(self):
+        self.profile_error.set("")
+        self.profile_editor.pack_forget()
 
     def manage_model_profiles(self):
         self.show("设置")
@@ -898,6 +905,20 @@ class Workbench(tk.Tk):
         ttk.Button(actions,text="新增模型",command=self.add_ai_profile).pack(side="left")
         ttk.Button(actions,text="修改选中",command=self.edit_ai_profile).pack(side="left",padx=6)
         ttk.Button(actions,text="删除选中",command=self.delete_ai_profile).pack(side="left")
+        self.profile_editor=ttk.Frame(profiles,style="Card.TFrame",padding=(10,8))
+        self.profile_editor_title=tk.StringVar(value="新增模型")
+        ttk.Label(self.profile_editor,textvariable=self.profile_editor_title,style="CardTitle.TLabel").pack(anchor="w",pady=(0,5))
+        self.profile_values={"name":tk.StringVar(),"api_url":tk.StringVar(),"model":tk.StringVar()}
+        for key,label in (("name","模型名称"),("api_url","API 地址"),("model","模型 ID")):
+            row=ttk.Frame(self.profile_editor,style="Card.TFrame");row.pack(fill="x",pady=3)
+            ttk.Label(row,text=label,width=14,background="white").pack(side="left")
+            ttk.Entry(row,textvariable=self.profile_values[key],style="Compact.TEntry").pack(side="left",fill="x",expand=True)
+        ttk.Label(self.profile_editor,text="API Key 在上方填写，仅保存在本次软件运行期间。",style="CardHint.TLabel").pack(anchor="w",pady=(3,0))
+        self.profile_error=tk.StringVar(value="")
+        ttk.Label(self.profile_editor,textvariable=self.profile_error,foreground="#b42318",background="white").pack(anchor="w",pady=(3,0))
+        editor_actions=ttk.Frame(self.profile_editor,style="Card.TFrame");editor_actions.pack(fill="x",pady=(6,0))
+        ttk.Button(editor_actions,text="保存模型",style="Accent.TButton",command=self._save_ai_profile_editor).pack(side="right")
+        ttk.Button(editor_actions,text="取消",command=self._cancel_ai_profile_edit).pack(side="right",padx=6)
         self._save_ai_profiles()
 
     def save_settings(self):
