@@ -39,7 +39,11 @@ class Workbench(tk.Tk):
         if os.name=="nt":
             try:self.tk.call("tk","scaling",ctypes.windll.user32.GetDpiForSystem()/96)
             except Exception:pass
-        self.title(APP_NAME); self.geometry("1500x960"); self.minsize(1050,700);self.state("zoomed")
+        self.title(APP_NAME)
+        screen_w,screen_h=self.winfo_screenwidth(),self.winfo_screenheight()
+        win_w=min(screen_w-40,max(1180,int(screen_w*.96)));win_h=min(screen_h-90,max(760,int(screen_h*.94)))
+        self.geometry(f"{win_w}x{win_h}+{max(0,(screen_w-win_w)//2)}+{max(0,(screen_h-win_h)//2)}")
+        self.minsize(min(1050,win_w),min(700,win_h))
         self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue();self.ai_profiles=self.cfg.get("ai_profiles",[]);self.current_profile=self.cfg.get("active_ai_profile","");self.ai_key=tk.StringVar(value="")
         self.conversations={"新对话":[]};self.conversation_logs={"新对话":[]};self.current_conversation="新对话";self.ai_history=self.conversations[self.current_conversation]
         self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.cli_executable=tk.StringVar(value=self.cfg.get("opencli_path",""));self.current_module="采集与导入";self.active_task=None
@@ -99,7 +103,7 @@ class Workbench(tk.Tk):
         split.add(self.ai_panel,weight=4);split.add(main,weight=6)
         split.pane(self.ai_panel,weight=4);split.pane(main,weight=6)
         self.splitter=split
-        self.after(180,lambda:self._set_default_split(0.4))
+        self.after(450,lambda:self._set_default_split(0.4))
         self.header=ttk.Frame(main,padding=(12,6)); self.header.pack(fill="x")
         self.page_title=ttk.Label(self.header,text="",style="Title.TLabel"); self.page_title.pack(anchor="w")
         self.page_hint=ttk.Label(self.header,text="",style="Muted.TLabel"); self.page_hint.pack(anchor="w",pady=(4,0))
@@ -153,7 +157,8 @@ class Workbench(tk.Tk):
 
     def _set_default_split(self,ratio):
         width=self.splitter.winfo_width()
-        if width>0:self.splitter.sashpos(0,int(width*ratio))
+        if width>200:self.splitter.sashpos(0,int(width*ratio))
+        else:self.after(250,lambda:self._set_default_split(ratio))
 
     def show(self,name):
         for page in self.pages.values(): page.pack_forget()
@@ -313,7 +318,7 @@ class Workbench(tk.Tk):
         self.yupoo_tab=yup;self.cli_tab=cli;self.import_tab=imp
         # Embed the original Yupoo interface, including its PDF/Excel and
         # product detail write-back actions, instead of hiding those controls.
-        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete)
+        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete,on_navigate=self.show)
         self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self._yupoo_staging_root()))
         self.yupoo_urls=self.yupoo_app.url
         c=self._card(cli,"1688 链接采集","每行一个商品链接；可批量下载。AI 助手可分析单个链接并在确认后调用 OpenCLIApp。")

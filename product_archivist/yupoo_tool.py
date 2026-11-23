@@ -538,8 +538,8 @@ def load_albums_from_excel(book_path,log,image_dir):
     return result
 
 class App:
-    def __init__(self, root, embedded=False, on_complete=None):
-        self.root=root;self.embedded=embedded;self.on_complete=on_complete
+    def __init__(self, root, embedded=False, on_complete=None, on_navigate=None):
+        self.root=root;self.embedded=embedded;self.on_complete=on_complete;self.on_navigate=on_navigate
         if not embedded:
             root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620)
         self.q=queue.Queue();self.busy=False
@@ -561,21 +561,26 @@ class App:
             ttk.Label(controls,text='保存位置').pack(anchor='w');row2=ttk.Frame(controls);row2.pack(fill='x',pady=(4,10));self.dest=ttk.Entry(row2);self.dest.pack(side='left',fill='x',expand=True);self.dest.insert(0,str(Path.home()/'Desktop'/'Yupoo下载'));ttk.Button(row2,text='浏览…',command=self.browse).pack(side='left',padx=(8,0))
         ttk.Label(controls,text='Yupoo 类目链接（支持批量，每行一个 URL）',style='Subhead.TLabel').pack(anchor='w')
         row=ttk.Frame(controls);row.pack(fill='x',pady=(5,12));self.url=tk.Text(row,height=2 if embedded else 3,wrap='word',font=('Microsoft YaHei UI',11),relief='flat',borderwidth=1,padx=8,pady=6,background='#fbfcfb',highlightthickness=1,highlightbackground='#e2e8e3',highlightcolor='#477963');self.url.pack(side='left',fill='x',expand=True);self.url.insert('1.0','https://he588123.x.yupoo.com/categories');ttk.Button(row,text='打开首个链接',style='Compact.TButton',command=self.open_link).pack(side='left',padx=(8,0))
-        ttk.Label(controls,text='下载与更新',style='Subhead.TLabel').pack(anchor='w',pady=(4,4))
-        opts=ttk.Frame(controls);opts.pack(fill='x',pady=(0,8));self.make_xlsx=tk.BooleanVar(value=True);self.make_pdf=tk.BooleanVar(value=False);ttk.Label(opts,text='下载完成后生成 Excel；PDF 请在下一步选择 Excel 生成。',wraplength=500 if embedded else 900,style='Muted.TLabel').pack(anchor='w')
+        ttk.Label(controls,text='第一步  下载与更新',style='Subhead.TLabel').pack(anchor='w',pady=(4,4))
+        opts=ttk.Frame(controls);opts.pack(fill='x',pady=(0,8));self.make_xlsx=tk.BooleanVar(value=True);self.make_pdf=tk.BooleanVar(value=False);ttk.Label(opts,text='下载时可同步生成 Excel；也可单独下载或之后再生成。',wraplength=500 if embedded else 900,style='Muted.TLabel').pack(anchor='w')
         self.action_buttons=[]
         download_row=ttk.Frame(controls);download_row.pack(fill='x',pady=(0,2))
         self.start=ttk.Button(download_row,text='下载图片 + 生成 Excel',style='Accent.TButton',command=lambda:self.start_job('all'));self.start.pack(side='left',padx=(0,8))
         b=ttk.Button(download_row,text='仅下载/更新图片',style='Compact.TButton',command=lambda:self.start_job('download'));b.pack(side='left');self.action_buttons.append(b)
         force_row=ttk.Frame(controls);force_row.pack(fill='x',pady=(0,10))
         self.force_download=tk.BooleanVar(value=False);ttk.Checkbutton(force_row,text='强制重新下载（忽略记录，重抓本批链接）',variable=self.force_download).pack(side='left',anchor='w')
-        ttk.Label(controls,text='第二步：根据 Excel 生成 PDF',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
-        gen_row=ttk.Frame(controls);gen_row.pack(fill='x',pady=(0,8))
-        self.pdf_from_excel_button=ttk.Button(gen_row,text='选择 Excel 并生成 PDF',command=self.choose_excel_for_pdf);self.pdf_from_excel_button.pack(side='left',padx=(0,8));self.action_buttons.append(self.pdf_from_excel_button)
-        b=ttk.Button(gen_row,text='单独生成 Excel',command=lambda:self.start_job('excel'));b.pack(side='left');self.action_buttons.append(b)
-        ttk.Label(controls,text='商品信息回写',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+        b=ttk.Button(download_row,text='单独生成 Excel',style='Compact.TButton',command=lambda:self.start_job('excel'));b.pack(side='left',padx=(8,0));self.action_buttons.append(b)
+        ttk.Label(controls,text='第二步  商品信息回写',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
         sync_row=ttk.Frame(controls);sync_row.pack(fill='x',pady=(0,8))
         self.sync_button=ttk.Button(sync_row,text='选择 Excel 并回写商品详情 TXT',command=self.choose_excel_to_sync);self.sync_button.pack(side='left');self.action_buttons.append(self.sync_button)
+        ttk.Label(controls,text='第三步  根据 Excel 生成 PDF',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+        gen_row=ttk.Frame(controls);gen_row.pack(fill='x',pady=(0,8))
+        self.pdf_from_excel_button=ttk.Button(gen_row,text='选择 Excel 并生成 PDF',command=self.choose_excel_for_pdf);self.pdf_from_excel_button.pack(side='left');self.action_buttons.append(self.pdf_from_excel_button)
+        if self.on_navigate:
+            ttk.Label(controls,text='第四步  产品复核与标准档案',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+            archive_row=ttk.Frame(controls);archive_row.pack(fill='x',pady=(0,8))
+            ttk.Button(archive_row,text='进入产品复核',style='Compact.TButton',command=lambda:self.on_navigate('产品复核')).pack(side='left',padx=(0,8))
+            ttk.Button(archive_row,text='生成标准档案',style='Accent.TButton',command=lambda:self.on_navigate('标准档案与上传')).pack(side='left')
         log_host=log_parent if embedded else main
         ttk.Label(log_host,text='运行进度与记录',style='Header.TLabel' if embedded else 'TLabel').pack(anchor='w',pady=(0,5))
         self.progress=ttk.Progressbar(log_host,mode='indeterminate');self.progress.pack(fill='x',pady=(0,8))
