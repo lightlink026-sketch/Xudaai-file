@@ -18,6 +18,7 @@ from yupoo_archive import standardize_yupoo_downloads
 APP_NAME = "Xudaai 产品档案工作台"
 BASE = Path.home() / "Documents" / "Xudaai产品档案"
 CONFIG = Path.home() / ".xudaai-archivist.json"
+CONVERSATIONS = Path.home() / ".xudaai-archivist-conversations.json"
 FIELDS = [
     ("name","产品名称"),("category","产品分类"),("brand","品牌"),("model","产品型号"),("sku","自有 SKU"),("supplier_name","供应商"),("supplier_sku","供应商型号/SKU"),("description","产品描述"),("material","材质"),("colors","颜色/变体"),("sizes","尺码/规格"),("currency","价格币种"),("cost_price","成本价"),("wholesale_price","批发价"),("moq","MOQ"),("carton_spec","箱规尺寸"),("units_per_carton","单箱装量"),("gross_weight_kg_per_carton","单箱毛重 kg"),("net_weight_kg_per_carton","单箱净重 kg"),("lead_time","交期"),("notes","备注")]
 
@@ -28,7 +29,7 @@ def cfg_read():
 class _DataBlob(ctypes.Structure):
     _fields_=[("cbData",wintypes.DWORD),("pbData",ctypes.POINTER(ctypes.c_byte))]
 
-def protect_local_secret(value):
+def protect_local_secret(value,purpose="Xudaai Product Archivist API Key"):
     """Encrypt a secret for the current Windows account with DPAPI."""
     if not value:return ""
     if os.name!="nt":raise RuntimeError("API Key 本地加密保存需要 Windows DPAPI。")
@@ -38,7 +39,7 @@ def protect_local_secret(value):
     crypt32.CryptProtectData.argtypes=[ctypes.POINTER(_DataBlob),wintypes.LPCWSTR,ctypes.c_void_p,ctypes.c_void_p,ctypes.c_void_p,wintypes.DWORD,ctypes.POINTER(_DataBlob)]
     crypt32.CryptProtectData.restype=wintypes.BOOL
     kernel32.LocalFree.argtypes=[ctypes.c_void_p];kernel32.LocalFree.restype=ctypes.c_void_p
-    if not crypt32.CryptProtectData(ctypes.byref(source),"Xudaai Product Archivist API Key",None,None,None,1,ctypes.byref(target)):
+    if not crypt32.CryptProtectData(ctypes.byref(source),purpose,None,None,None,1,ctypes.byref(target)):
         raise ctypes.WinError(ctypes.get_last_error())
     try:return "dpapi:"+base64.b64encode(ctypes.string_at(target.pbData,target.cbData)).decode("ascii")
     finally:kernel32.LocalFree(target.pbData)
@@ -83,10 +84,12 @@ class Workbench(tk.Tk):
         self.geometry(f"{win_w}x{win_h}+{max(0,(screen_w-win_w)//2)}+{max(0,(screen_h-win_h)//2)}")
         self.minsize(min(1050,win_w),min(700,win_h))
         self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue();self.ai_profiles=self.cfg.get("ai_profiles",[]);self.current_profile=self.cfg.get("active_ai_profile","");self.ai_key=tk.StringVar(value="")
-        self.conversations={"新对话":[]};self.conversation_logs={"新对话":[]};self.current_conversation="新对话";self.ai_history=self.conversations[self.current_conversation]
+        self.conversations={"新对话":[]};self.conversation_logs={"新对话":[]};self.current_conversation="新对话";self.ai_history=self.conversations[self.current_conversation];self.conversation_storage_ok=True
+        self._restore_local_conversations()
         self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.cli_executable=tk.StringVar(value=self.cfg.get("opencli_path",""));self.current_module="采集与导入";self.active_task=None
         self._restore_local_api_key()
-        self._style(); self._layout(); self.show("采集与导入")
+        self._style(); self._layout(); self.protocol("WM_DELETE_WINDOW",self._close_workbench);self.show("采集与导入")
+        if not self.conversation_storage_ok:self.status.set("无法读取本地对话存档；原文件已保留。")
 
     def _style(self):
         # A single quiet, readable visual system across every module.
@@ -182,7 +185,7 @@ class Workbench(tk.Tk):
         ttk.Label(footer,text="写入资料前会先确认",style="Muted.TLabel",background="white").pack(side="left",padx=(8,0))
         self.send_button=ttk.Button(footer,text="发送  ↑",style="Accent.TButton",command=self.ai_send);self.send_button.pack(side="right")
         self._refresh_conversation_ui()
-        self._chat_line("助手","你好，我会根据右侧当前模块提供帮助。可以提问、粘贴链接或要求检查当前产品资料。")
+        if not self.conversation_logs.get(self.current_conversation):self._chat_line("助手","你好，我会根据右侧当前模块提供帮助。可以提问、粘贴链接或要求检查当前产品资料。")
         self._refresh_model_choices()
         self._refresh_ai_module()
 
@@ -240,21 +243,22 @@ class Workbench(tk.Tk):
     def select_conversation(self,_event=None):
         name=self.conversation_var.get()
         if name in self.conversations:
-            self.current_conversation=name;self._refresh_conversation_ui()
+            self.current_conversation=name;self._refresh_conversation_ui();self._save_local_conversations()
 
     def new_conversation(self):
         base="新对话";index=1;name=base
         while name in self.conversations:index+=1;name=f"{base} {index}"
         self.conversations[name]=[];self.conversation_logs[name]=[];self.current_conversation=name
         self._refresh_conversation_ui()
+        self._chat_line("助手","你好，我会根据右侧当前模块提供帮助。")
 
     def delete_conversation(self):
         if len(self.conversations)<=1:
-            self.conversations[self.current_conversation]=[];self.conversation_logs[self.current_conversation]=[];self._refresh_conversation_ui();return
+            self.conversations[self.current_conversation]=[];self.conversation_logs[self.current_conversation]=[];self._refresh_conversation_ui();self._save_local_conversations();return
         name=self.current_conversation
         if messagebox.askyesno(APP_NAME,f"删除对话“{name}”？"):
             self.conversations.pop(name,None);self.conversation_logs.pop(name,None)
-            self.current_conversation=next(iter(self.conversations));self._refresh_conversation_ui()
+            self.current_conversation=next(iter(self.conversations));self._refresh_conversation_ui();self._save_local_conversations()
 
     def _refresh_model_choices(self):
         if not hasattr(self,"model_box"):return
@@ -292,6 +296,43 @@ class Workbench(tk.Tk):
             profile["api_key_protected"]=protect_local_secret(key)
             self.cfg["ai_profiles"]=self.ai_profiles
             CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+
+    def _restore_local_conversations(self):
+        if not CONVERSATIONS.is_file():return
+        try:
+            saved=CONVERSATIONS.read_text(encoding="utf-8")
+            payload=unprotect_local_secret(saved) if saved.startswith("dpapi:") else saved
+            data=json.loads(payload)
+            conversations=data.get("conversations")
+            logs=data.get("logs")
+            if not isinstance(conversations,dict) or not isinstance(logs,dict):raise ValueError("对话存档格式不正确")
+            valid={str(name):[entry for entry in messages if isinstance(entry,dict) and entry.get("role") in {"user","assistant","system"} and isinstance(entry.get("content"),str)] for name,messages in conversations.items() if isinstance(messages,list)}
+            valid_logs={str(name):[(str(pair[0]),str(pair[1])) for pair in entries if isinstance(pair,(list,tuple)) and len(pair)==2] for name,entries in logs.items() if isinstance(entries,list)}
+            if not valid:valid={"新对话":[]}
+            for name in valid:valid_logs.setdefault(name,[])
+            self.conversations=valid;self.conversation_logs=valid_logs
+            active=str(data.get("current_conversation") or "")
+            self.current_conversation=active if active in valid else next(iter(valid))
+            self.ai_history=self.conversations[self.current_conversation]
+        except Exception:
+            self.conversation_storage_ok=False
+
+    def _save_local_conversations(self):
+        if not self.conversation_storage_ok:return False
+        try:
+            data={"current_conversation":self.current_conversation,"conversations":self.conversations,"logs":self.conversation_logs}
+            encrypted=protect_local_secret(json.dumps(data,ensure_ascii=False,separators=(",",":")),"Xudaai Product Archivist Conversation History")
+            temporary=CONVERSATIONS.with_suffix(CONVERSATIONS.suffix+".tmp")
+            temporary.write_text(encrypted,encoding="utf-8");temporary.replace(CONVERSATIONS)
+            return True
+        except Exception as e:
+            self.conversation_storage_ok=False
+            if hasattr(self,"status"):self.status.set(f"对话本地保存失败：{e}")
+            return False
+
+    def _close_workbench(self):
+        self._save_local_conversations()
+        self.destroy()
 
     def _persist_local_api_key(self,*,clear_if_empty=False):
         key=self.ai_key.get().strip()
@@ -1179,6 +1220,7 @@ class Workbench(tk.Tk):
     def _chat_line(self,role,text):
         self.conversation_logs.setdefault(self.current_conversation,[]).append((role,str(text)))
         self.chat.configure(state="normal");self.chat.insert("end",f"{role}\n","speaker");self.chat.insert("end",f"{text}\n\n");self.chat.configure(state="disabled");self.chat.see("end")
+        self._save_local_conversations()
 
     def ai_send(self):
         prompt=self.prompt.get("1.0","end").strip()
