@@ -7,10 +7,11 @@ import shutil
 import subprocess
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
-from core import safe_stem
+from core import make_product_package, safe_stem, scan_product_folder
 
 
 def _opencli(configured: str | None = None) -> str:
@@ -233,7 +234,9 @@ def download_1688_shop_products(url: str, output_root: Path, executable: str | N
         for image in sheet._images:
             row_number = image.anchor._from.row + 1
             embedded_images.setdefault(row_number, []).append(image)
-        for row_number in range(2, sheet.max_row + 1):
+        staging_root = Path(tempfile.mkdtemp(prefix="xudaai-1688-shop-"))
+        try:
+          for row_number in range(2, sheet.max_row + 1):
             offer_id = str(sheet.cell(row_number, 1).value or "").strip()
             detail_url = str(sheet.cell(row_number, 2).value or "").strip()
             title = str(sheet.cell(row_number, 3).value or "").strip()
@@ -251,39 +254,55 @@ def download_1688_shop_products(url: str, output_root: Path, executable: str | N
                        "sales_text": sales, "image_url": image_url, "page": page,
                        "_source_url": detail_url or offerlist_url, "store_url": offerlist_url,
                        "shop_id": shop_id}
-            product_dir = supplier_dir / f"{safe_stem(title)}_{safe_stem(offer_id)}"
-            existing_meta = product_dir / "1688商品信息.json"
-            if product_dir.exists():
-                try:
-                    previous = json.loads(existing_meta.read_text(encoding="utf-8")) if existing_meta.is_file() else {}
-                except (OSError, ValueError):
-                    previous = {}
-                if str(previous.get("offer_id") or "") != offer_id:
-                    suffix = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-                    product_dir = supplier_dir / f"{safe_stem(title)}_{safe_stem(offer_id)}_{suffix}"
-            product_dir.mkdir(parents=True, exist_ok=True)
-            source_dir = product_dir / "原始资料"
-            assets_dir = source_dir / "1688下载素材"
+            stage_dir = staging_root / f"{safe_stem(title)}_{safe_stem(offer_id)}"
+            assets_dir = stage_dir / "1688下载素材"
             assets_dir.mkdir(parents=True, exist_ok=True)
             metadata = json.dumps(details, ensure_ascii=False, indent=2)
-            if not (product_dir / "1688商品信息.json").exists():
-                (product_dir / "1688商品信息.json").write_text(metadata, encoding="utf-8")
-            if not (source_dir / "1688商品信息.json").exists():
-                (source_dir / "1688商品信息.json").write_text(metadata, encoding="utf-8")
+            (stage_dir / "1688商品信息.json").write_text(metadata, encoding="utf-8")
             for image_index, image in enumerate(embedded_images.get(row_number, []), 1):
                 extension = str(getattr(image, "format", "jpeg") or "jpeg").lower().replace("jpg", "jpeg")
                 extension = extension if extension in {"jpeg", "png", "webp", "gif"} else "jpeg"
                 image_path = assets_dir / f"主图_{image_index}.{extension}"
-                if not image_path.exists():
-                    image_path.write_bytes(image._data())
-            products.append({"supplier": store_name, "title": title, "product_dir": str(product_dir),
-                             "source_dir": str(product_dir), "details": details,
-                             "source_product_id": offer_id})
+                image_path.write_bytes(image._data())
+            info = scan_product_folder(stage_dir, max_files=30000)
+            stable_source = detail_url or f"1688:{shop_id}:{offer_id}"
+            product_id = str(uuid.uuid5(uuid.NAMESPACE_URL, stable_source))
+            product_code = "P-" + uuid.UUID(product_id).hex[:12].upper()
+            values = {"name": title, "supplier_name": store_name,
+                      "cost_price": str(price) if price is not None else "",
+                      "unit_price": str(price) if price is not None else "",
+                      "currency": "CNY", "moq": str(moq) if moq is not None else "",
+                      "notes": f"店铺列表销量：{sales}" if sales not in (None, "") else "",
+                      "source_type": "1688/OpenCLI", "source_url": stable_source,
+                      "source_product_id": offer_id, "product_id": product_id,
+                      "product_code": product_code,
+                      "field_sources": {"name": "1688 shop-products 商品标题",
+                                        "supplier_name": "1688 店铺信息",
+                                        "cost_price": "1688 shop-products 商品列表价格",
+                                        "moq": "1688 shop-products 商品列表起订量"}}
+            main_image = info["images"][0].relative_to(stage_dir).as_posix() if info["images"] else ""
+            destination = supplier_dir / f"{product_code}-{safe_stem(title)}"
+            manifest_path = destination / "产品档案.json"
+            if manifest_path.is_file():
+                try:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    manifest = {}
+                if manifest.get("product_id") != product_id:
+                    raise FileExistsError(f"标准档案目录已存在且来源不匹配，未覆盖：{destination}")
+                # Re-importing the same item must preserve fields already reviewed by the user.
+            else:
+                destination, manifest = make_product_package(info, None, output_root, values, main_image)
+            products.append({"supplier": store_name, "title": title, "product_dir": str(destination),
+                             "source_dir": str(destination), "details": details,
+                             "manifest": manifest, "source_product_id": offer_id})
+        finally:
+            shutil.rmtree(staging_root, ignore_errors=True)
     finally:
         workbook.close()
     if not products:
         raise RuntimeError(f"shop-products 没有找到商品行，请检查店铺登录状态和页面。\n{output[-2000:]}")
     return {"supplier": store_name, "title": f"{store_name} 店铺商品", "product_dir": str(supplier_dir),
             "source_dir": str(supplier_dir), "details": {"store_url": offerlist_url},
-            "products": products, "product_count": len(products), "workbook": str(workbook_path),
+            "products": products, "product_count": len(products), "standard_archives": True, "workbook": str(workbook_path),
             "source_product_id": shop_id}

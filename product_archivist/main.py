@@ -471,10 +471,10 @@ class Workbench(tk.Tk):
         local=Path(os.environ.get("LOCALAPPDATA",str(Path.home()/"AppData"/"Local")))
         self.cli_output_var=tk.StringVar(value=self.cfg.get("opencli_output",str(local/"Xudaai产品档案工作台"/"1688下载")))
         self._file_row(c,"1688 保存位置",self.cli_output_var,True)
-        self.cli_download_summary=tk.StringVar(value="尚未扫描下载目录")
+        self.cli_download_summary=tk.StringVar(value="下载完成后，可选择商品进入复核")
         downloads=ttk.Frame(c,style="Card.TFrame");downloads.pack(fill="x",pady=(8,0))
         ttk.Label(downloads,textvariable=self.cli_download_summary,style="Muted.TLabel").pack(side="left")
-        ttk.Button(downloads,text="选择文件夹并勾选初步建档",style="Compact.TButton",command=lambda:self.open_archive_folder_picker("1688",self.cli_output_var.get())).pack(side="right")
+        ttk.Button(downloads,text="选择商品并进入复核",style="Compact.TButton",command=lambda:self.open_archive_folder_picker("1688",self.cli_output_var.get())).pack(side="right")
         c=self._card(imp,"导入 Excel 或本地目录","选择含多个供应商和产品的目录，或用 Excel 清单匹配产品图片。")
         self.import_folder=tk.StringVar(); self.import_excel=tk.StringVar()
         self._file_row(c,"资料根目录",self.import_folder,True); self._file_row(c,"产品 Excel（可选）",self.import_excel,False)
@@ -724,9 +724,17 @@ class Workbench(tk.Tk):
                 count=sum(1 for f in folder.rglob("*") if f.is_file() and f.suffix.lower() in IMAGE_EXTS)
                 entries.append((folder,count,str(data.get("title") or folder.name)))
         elif source_type=="1688":
+            for manifest in sorted(root.rglob("产品档案.json")):
+                try:data=json.loads(manifest.read_text(encoding="utf-8"))
+                except (OSError,ValueError):continue
+                if data.get("source_type") not in {"1688", "1688/OpenCLI"}:continue
+                folder=manifest.parent
+                count=sum(1 for f in folder.rglob("*") if f.is_file() and f.name!="产品档案.json")
+                entries.append((folder,count,str(data.get("name") or folder.name)))
             for meta in sorted(root.rglob("1688商品信息.json")):
                 if meta.parent.name=="原始资料":continue
                 folder=meta.parent
+                if (folder/"产品档案.json").is_file():continue
                 try:data=json.loads(meta.read_text(encoding="utf-8"));name=str(data.get("title") or data.get("name") or folder.name)
                 except (OSError,ValueError):name=folder.name
                 count=sum(1 for f in folder.rglob("*") if f.is_file() and f.name!="1688商品信息.json")
@@ -753,7 +761,9 @@ class Workbench(tk.Tk):
         entries=self._discover_archive_folders(source_type,root)
         if source_type=="1688" and hasattr(self,"cli_download_summary"):
             total=sum(item[1] for item in entries)
-            self.cli_download_summary.set(f"目录中有 {len(entries)} 款产品、{total} 个素材文件。")
+            standard_count=sum(1 for folder,_,_ in entries if (folder/"产品档案.json").is_file())
+            if standard_count==len(entries):self.cli_download_summary.set(f"已有 {standard_count} 款标准档案、{total} 个文件；可勾选进入复核。")
+            else:self.cli_download_summary.set(f"目录中有 {len(entries)} 款产品、{total} 个素材文件；可勾选进入复核或初步建档。")
         if source_type=="本地资料" and hasattr(self,"local_scan_summary"):
             total=sum(item[1] for item in entries)
             self.local_scan_summary.set(f"发现 {len(entries)} 个产品目录、{total} 个素材文件。")
@@ -762,11 +772,13 @@ class Workbench(tk.Tk):
             self.yupoo_app.archive_summary.set(f"发现 {len(entries)} 个相册、{total} 张图片；可勾选后初步建档。")
         if not entries:return messagebox.showinfo(APP_NAME,f"所选目录中没有识别到可处理的产品文件夹：\n{root}")
 
-        dialog=tk.Toplevel(self);dialog.title("勾选产品并初步生成标准档案");dialog.transient(self);dialog.geometry("980x560")
+        standard_only=(source_type=="1688" and all((folder/"产品档案.json").is_file() for folder,_,_ in entries))
+        dialog=tk.Toplevel(self);dialog.title("选择商品进入产品复核" if standard_only else "勾选产品并生成标准档案");dialog.transient(self);dialog.geometry("980x560")
         outer=ttk.Frame(dialog,padding=16);outer.pack(fill="both",expand=True)
         ttk.Label(outer,text=f"{source_type} 下载清单",style="CardTitle.TLabel").pack(anchor="w")
         total_files=sum(item[1] for item in entries)
-        ttk.Label(outer,text=f"发现 {len(entries)} 款产品 / 文件夹，共 {total_files} 个图片或素材文件。勾选要初步建档的产品。",style="CardHint.TLabel").pack(anchor="w",pady=(3,10))
+        action_hint="勾选要进入复核的商品；档案已按标准结构生成，不会重复建档。" if standard_only else "勾选要初步建档的产品。"
+        ttk.Label(outer,text=f"发现 {len(entries)} 款产品 / 文件夹，共 {total_files} 个图片或素材文件。{action_hint}",style="CardHint.TLabel").pack(anchor="w",pady=(3,10))
         body=ttk.Frame(outer);body.pack(fill="both",expand=True)
         tree=ttk.Treeview(body,columns=("check","name","count","path"),show="headings",selectmode="browse")
         for col,title,width,stretch in (("check","选择",55,False),("name","产品名称",230,False),("count","素材数量",90,False),("path","文件夹位置",550,True)):
@@ -784,7 +796,12 @@ class Workbench(tk.Tk):
         tree.bind("<Double-1>",toggle)
         actions=ttk.Frame(outer);actions.pack(fill="x",pady=(10,0))
         selected_count=tk.StringVar(value="已选择 0 款")
-        def update_selected(*_):selected_count.set(f"已选择 {sum(tree.item(iid,'values')[0]=='☑' for iid in by_id)} 款")
+        action_button=None
+        def update_selected(*_):
+            selected=[by_id[iid] for iid in by_id if tree.item(iid,"values")[0]=="☑"]
+            selected_count.set(f"已选择 {len(selected)} 款")
+            if action_button and source_type=="1688":
+                action_button.configure(text="进入产品复核" if selected and all((folder/"产品档案.json").is_file() for folder in selected) else "初步生成标准档案")
         def select_all(value):
             for iid in by_id:
                 vals=list(tree.item(iid,"values"));vals[0]="☑" if value else "☐";tree.item(iid,values=vals)
@@ -795,8 +812,14 @@ class Workbench(tk.Tk):
         def begin():
             folders=[by_id[iid] for iid in by_id if tree.item(iid,"values")[0]=="☑"]
             if not folders:return selected_count.set("请至少勾选一款产品。")
-            dialog.destroy();self._create_selected_archives(source_type,root,folders,excel)
-        ttk.Button(actions,text="初步生成标准档案",style="Accent.TButton",command=begin).pack(side="right")
+            dialog.destroy()
+            if source_type=="1688" and all((folder/"产品档案.json").is_file() for folder in folders):
+                self.load_standard_archives(folders)
+                self.status.set(f"已载入 {len(folders)} 款 1688 标准档案，进入产品复核。")
+            else:self._create_selected_archives(source_type,root,folders,excel)
+        button_text="进入产品复核" if standard_only else "初步生成标准档案"
+        action_button=ttk.Button(actions,text=button_text,style="Accent.TButton",command=begin)
+        action_button.pack(side="right")
 
     def _create_selected_archives(self,source_type,root,folders,excel=None):
         task=create_task("import",f"{source_type}初步建档",f"已选择 {len(folders)} 款产品",str(self.output));update_task(task,status="建档中 0%",product_count=0,output_path=str(self.output),progress=0)
@@ -811,8 +834,12 @@ class Workbench(tk.Tk):
                     rows=read_product_rows(excel) if excel and Path(excel).is_file() else []
                     made=[]
                     for index,folder in enumerate(folders,1):
-                        item=self._make_source_batch_item(folder,source_type,rows)
-                        path,manifest=make_product_package(item["info"],None,self.output,item["values"],item.get("main_image",""))
+                        existing=Path(folder)/"产品档案.json"
+                        if source_type=="1688" and existing.is_file():
+                            manifest=json.loads(existing.read_text(encoding="utf-8"));path=Path(folder)
+                        else:
+                            item=self._make_source_batch_item(folder,source_type,rows)
+                            path,manifest=make_product_package(item["info"],None,self.output,item["values"],item.get("main_image",""))
                         made.append((path,manifest))
                         update_task(task,status=f"建档中 {index}/{len(folders)}",product_count=index,output_path=str(self.output),progress=index*100/len(folders))
                 self.after(0,lambda:self._finish_selected_archives(task,made,source_type))
@@ -950,7 +977,9 @@ class Workbench(tk.Tk):
         products=self._discover_archive_folders("1688",output)
         files=sum(entry[1] for entry in products)
         if hasattr(self,"cli_download_summary"):
-            self.cli_download_summary.set(f"本次采集 {product_count} 款；目录共发现 {len(products)} 款、{files} 个素材文件；可勾选后初步建档。")
+            standard_count=sum(1 for folder,_,_ in products if (folder/"产品档案.json").is_file())
+            if standard_count==len(products) and products:self.cli_download_summary.set(f"本次生成 {product_count} 款标准档案；共 {standard_count} 款、{files} 个文件；可选择商品进入复核。")
+            else:self.cli_download_summary.set(f"本次采集 {product_count} 款；目录共发现 {len(products)} 款、{files} 个素材文件；可勾选后进入复核。")
         self.status.set(f"OpenCLIApp 采集完成：成功 {ok} 个链接，失败 {failed}；本次 {product_count} 款商品，目录共 {len(products)} 款、{files} 个素材文件。")
         summary=f"1688采集已结束：成功 {ok} 个链接，失败 {failed}；本次得到 {product_count} 款商品。"
         if failed:
