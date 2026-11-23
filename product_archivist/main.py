@@ -9,7 +9,7 @@ import httpx
 from core import DOC_EXTS, IMAGE_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, missing_product_fields, read_product_rows, read_text, safe_stem, scan_product_folder
 from opencli_adapter import check_opencli, download_1688
 from source_records import record_source
-from task_center import create_task, update_task, list_tasks, delete_tasks
+from task_center import create_task, update_task, list_tasks, list_all_tasks, delete_tasks
 from yupoo_tool import App as YupooProcessor
 from yupoo_archive import standardize_yupoo_downloads
 
@@ -93,7 +93,7 @@ class Workbench(tk.Tk):
         ttk.Label(top,text="产品档案工作台",style="Muted.TLabel").pack(side="left",padx=(12,24))
         self.nav_buttons={}
         nav=ttk.Frame(top);nav.pack(side="left",fill="x",expand=True)
-        for name in ("采集与导入","产品复核","标准档案与上传","任务中心","设置"):
+        for name in ("采集与导入","产品复核","标准档案与上传","设置"):
             button=ttk.Button(nav,text=name,style="Nav.TButton",command=lambda n=name:self.show(n));button.pack(side="left",padx=3);self.nav_buttons[name]=button
         ttk.Separator(shell).pack(side="top",fill="x")
         workspace=ttk.Frame(shell,padding=(14,8));workspace.pack(fill="both",expand=True)
@@ -162,7 +162,7 @@ class Workbench(tk.Tk):
 
     def show(self,name):
         for page in self.pages.values(): page.pack_forget()
-        titles={"采集与导入":"又拍、1688、Excel 和本地目录","产品复核":"供应商与产品资料核对","标准档案与上传":"统一目录生成与资料库上传","任务中心":"下载任务 / 上传任务","设置":"模型、服务和本地路径"}
+        titles={"采集与导入":"又拍、1688、Excel 和本地目录","产品复核":"供应商与产品资料核对","标准档案与上传":"统一目录生成与资料库上传","设置":"模型、服务和本地路径"}
         self.page_title.configure(text=name);self.page_hint.configure(text=titles.get(name,""))
         self.current_module=name;self._refresh_ai_module()
         for key,button in self.nav_buttons.items():button.configure(style="NavActive.TButton" if key==name else "Nav.TButton")
@@ -182,7 +182,6 @@ class Workbench(tk.Tk):
             "采集与导入":["识别这个链接并准备采集","帮我检查当前导入资料"],
             "产品复核":["检查当前产品缺少什么","根据现有资料提出字段草稿"],
             "标准档案与上传":["检查待上传档案的缺项","解释标准目录结构"],
-            "任务中心":["解释当前任务状态","分析当前任务失败原因"],
             "设置":["指导我配置 AI 模型","说明这些连接设置"],
         }
         for child in self.ai_suggestions.winfo_children():child.destroy()
@@ -302,14 +301,14 @@ class Workbench(tk.Tk):
         canvas.bind("<Enter>",lambda _e,c=canvas:c.bind_all("<MouseWheel>",lambda e:c.yview_scroll(int(-1*(e.delta/120)),"units")))
         canvas.bind("<Leave>",lambda _e,c=canvas:c.unbind_all("<MouseWheel>"))
         self.page_title.configure(text=name)
-        hints={"采集与导入":"又拍、1688、Excel 和人工资料进入同一产品档案流程。","产品复核":"按供应商和产品逐项核对资料；缺失字段会标出，AI 草稿需要确认后写入。","标准档案与上传":"生成统一目录结构，检查后上传至 Xudaai 资料助手。","任务中心":"下载/导入与上传任务分开查询、分页、重试或删除任务记录。","设置":"配置 AI 模型、Xudaai 服务和本地标准档案输出位置。"}
+        hints={"采集与导入":"原始下载、进度、批量初步建档和导出都在当前工作台处理。","产品复核":"按供应商和产品逐项核对资料；缺失字段会标出，AI 草稿需要确认后写入。","标准档案与上传":"生成统一目录结构；在当前页面查看上传进度、失败原因并重试。","设置":"配置 AI 模型、Xudaai 服务和本地标准档案输出位置。"}
         self.page_hint.configure(text=hints[name])
-        getattr(self,"build_"+{"采集与导入":"collect","产品复核":"review","标准档案与上传":"upload","任务中心":"tasks","设置":"settings"}[name])(content)
+        getattr(self,"build_"+{"采集与导入":"collect","产品复核":"review","标准档案与上传":"upload","设置":"settings"}[name])(content)
         return page
 
     def build_home(self,p):
         c=self._card(p,"统一工作流程","不同采集方式只负责拿到原始资料，档案整理和上传规则只有一套。")
-        for title,body in [("1 采集与导入","又拍链接 · 1688/OpenCLI · 多产品 Excel · 本地供应商文件夹"),("2 产品复核","检查供应商、价格、箱规、毛重；查看原始资料和 AI 提取依据"),("3 生成与上传","按标准目录生成每款产品档案，再将选中产品上传到资料助手"),("4 任务中心","集中管理采集、导入和上传记录，支持搜索、分页、重试和删除记录")]:
+        for title,body in [("1 采集与导入","又拍链接 · 1688/OpenCLI · 多产品 Excel · 本地供应商文件夹；查看下载进度并批量处理原始资料"),("2 产品复核","检查供应商、价格、箱规、毛重；查看原始资料和 AI 提取依据"),("3 标准档案与上传","按标准目录生成档案，在同一页面跟踪上传进度并重试失败项")]:
             ttk.Label(c,text=title,font=("Microsoft YaHei UI",12,"bold"),background="white").pack(anchor="w",pady=(9,2)); ttk.Label(c,text=body,background="white",foreground=self.ui["muted"]).pack(anchor="w")
         b=self._card(p,"当前批次"); self.home_count=tk.StringVar(value="尚无待复核产品"); ttk.Label(b,textvariable=self.home_count,background="white",font=("Microsoft YaHei UI",14)).pack(anchor="w")
         ttk.Button(b,text="开始采集 / 导入",style="Accent.TButton",command=lambda:self.show("采集与导入")).pack(anchor="w",pady=(12,0))
@@ -320,8 +319,10 @@ class Workbench(tk.Tk):
         self.collect_view=ttk.Frame(p);self.collect_view.pack(fill="both",expand=True)
         yup=ttk.Frame(self.collect_view,padding=8);cli=ttk.Frame(self.collect_view,padding=14);imp=ttk.Frame(self.collect_view,padding=14)
         self.collect_views={"yupoo":yup,"1688":cli,"import":imp};self.collect_switch_buttons={};self.active_collect_tab="yupoo"
-        for key,label in (("yupoo","又拍采集"),("1688","1688 / OpenCLI"),("import","Excel / 本地资料")):
+        for key,label in (("yupoo","又拍采集"),("1688","1688 / OpenCLI"),("import","Excel / 本地资料"),("downloads","下载资料与进度")):
             self.collect_switch_buttons[key]=ttk.Button(switcher,text=label,style="Segment.TButton",command=lambda k=key:self.show_collect_source(k));self.collect_switch_buttons[key].pack(side="left",padx=(0,6))
+        self.downloads_view=ttk.Frame(self.collect_view,padding=10);self.collect_views["downloads"]=self.downloads_view
+        self.build_download_board(self.downloads_view)
         self.yupoo_tab=yup;self.cli_tab=cli;self.import_tab=imp
         # Embed the original Yupoo interface, including its PDF/Excel and
         # product detail write-back actions, instead of hiding those controls.
@@ -362,6 +363,209 @@ class Workbench(tk.Tk):
         for pane in self.collect_views.values():pane.pack_forget()
         self.active_collect_tab=key;self.collect_views[key].pack(fill="both",expand=True)
         for name,button in self.collect_switch_buttons.items():button.configure(style="SegmentActive.TButton" if name==key else "Segment.TButton")
+        if key=="downloads":
+            self.refresh_download_board();self._schedule_embedded_task_refresh()
+
+    def build_download_board(self,parent):
+        head=ttk.Frame(parent);head.pack(fill="x",pady=(0,8))
+        ttk.Label(head,text="下载记录",font=("Microsoft YaHei UI",12,"bold")).pack(side="left")
+        ttk.Label(head,text="进度和结果与原始资料目录关联；可从这里直接勾选并处理产品。",style="Muted.TLabel").pack(side="left",padx=12)
+        ttk.Button(head,text="刷新",style="Compact.TButton",command=self.refresh_download_board).pack(side="right")
+        task_wrap=ttk.Frame(parent);task_wrap.pack(fill="x",pady=(0,10))
+        self.download_task_tree=ttk.Treeview(task_wrap,columns=("time","source","summary","count","progress","status","path"),show="headings",height=4,selectmode="browse")
+        for col,title,width in (("time","时间",130),("source","采集器",120),("summary","下载批次",220),("count","产品数",70),("progress","进度",70),("status","状态",170),("path","保存目录",280)):
+            self.download_task_tree.heading(col,text=title);self.download_task_tree.column(col,width=width,stretch=col in {"summary","path"})
+        self.download_task_tree.pack(fill="x")
+        self.download_task_tree.bind("<<TreeviewSelect>>",self._show_download_task_detail)
+        self.download_task_rows={}
+        self.download_task_detail=tk.StringVar(value="选择下载记录可查看采集结果和失败原因。")
+        ttk.Label(parent,textvariable=self.download_task_detail,style="Muted.TLabel",wraplength=1000,justify="left").pack(fill="x",pady=(4,4))
+        task_actions=ttk.Frame(parent);task_actions.pack(fill="x",pady=(0,8))
+        ttk.Button(task_actions,text="打开下载目录",style="Compact.TButton",command=self.open_selected_download_task_folder).pack(side="left")
+        ttk.Button(task_actions,text="删除任务记录",style="Compact.TButton",command=self.delete_selected_download_task).pack(side="left",padx=5)
+        products_head=ttk.Frame(parent);products_head.pack(fill="x",pady=(2,5))
+        ttk.Label(products_head,text="已下载产品",font=("Microsoft YaHei UI",12,"bold")).pack(side="left")
+        self.download_product_summary=tk.StringVar(value="刷新以扫描下载目录")
+        ttk.Label(products_head,textvariable=self.download_product_summary,style="Muted.TLabel").pack(side="left",padx=12)
+        body=ttk.Frame(parent);body.pack(fill="both",expand=True)
+        self.download_product_tree=ttk.Treeview(body,columns=("check","source","name","supplier","files","archive","path"),show="headings",height=10,selectmode="browse")
+        for col,title,width in (("check","选择",52),("source","来源",105),("name","产品名称",200),("supplier","供应商",130),("files","文件数",65),("archive","建档状态",100),("path","原始文件夹",300)):
+            self.download_product_tree.heading(col,text=title);self.download_product_tree.column(col,width=width,stretch=col in {"name","path"},anchor="center" if col in {"check","files","archive"} else "w")
+        scroll=ttk.Scrollbar(body,orient="vertical",command=self.download_product_tree.yview);self.download_product_tree.configure(yscrollcommand=scroll.set)
+        self.download_product_tree.pack(side="left",fill="both",expand=True);scroll.pack(side="right",fill="y")
+        self.download_product_rows={};self.download_product_tree.bind("<Button-1>",self._toggle_download_product)
+        actions=ttk.Frame(parent);actions.pack(fill="x",pady=(8,0))
+        for label,cmd in (("全选",lambda:self._set_download_checks(True)),("全不选",lambda:self._set_download_checks(False)),("打开文件夹",self.open_selected_download_folder),("初步生成标准档案",self.archive_selected_downloads),("批量生成 Excel",lambda:self.export_selected_downloads("excel")),("批量生成 PDF",lambda:self.export_selected_downloads("pdf")),("删除原始资料",self.delete_selected_downloads)):
+            ttk.Button(actions,text=label,style="Accent.TButton" if label=="初步生成标准档案" else "Compact.TButton",command=cmd).pack(side="left",padx=(0,5))
+        self.download_selection_label=tk.StringVar(value="已选择 0 款")
+        ttk.Label(actions,textvariable=self.download_selection_label,style="Muted.TLabel").pack(side="right")
+
+    def _schedule_embedded_task_refresh(self):
+        if getattr(self,"_embedded_task_refresh_id",None):return
+        self._embedded_task_refresh_id=self.after(1800,self._poll_embedded_task_boards)
+
+    def _poll_embedded_task_boards(self):
+        self._embedded_task_refresh_id=None
+        if self.current_module=="采集与导入" and getattr(self,"active_collect_tab","")=="downloads":self.refresh_download_board(scan_products=False)
+        if self.current_module=="标准档案与上传":self.refresh_upload_board()
+        if (self.current_module=="采集与导入" and getattr(self,"active_collect_tab","")=="downloads") or self.current_module=="标准档案与上传":self._schedule_embedded_task_refresh()
+
+    def refresh_download_board(self,scan_products=True):
+        if not hasattr(self,"download_task_tree"):return
+        selected_task=self.download_task_tree.selection();selected_task_id=self.download_task_rows.get(selected_task[0],{}).get("task_id") if selected_task else None
+        checked_paths={str(item["folder"].resolve()) for item in getattr(self,"download_product_rows",{}).values() if item.get("checked")}
+        rows=list_all_tasks("all")
+        self.download_task_tree.delete(*self.download_task_tree.get_children())
+        products={};task_count=0;self.download_task_rows={}
+        source_map={"Yupoo":"Yupoo","1688/OpenCLI":"1688","Excel/本地资料":"本地资料"}
+        for task in rows:
+            if task.get("task_type") not in {"download","import"}:continue
+            source=source_map.get(task.get("source_type"),task.get("source_type",""))
+            task_count+=1;path=Path(task.get("output_path") or "")
+            label=source if task.get("task_type")=="download" else f"处理 · {source}"
+            iid=task["task_id"]
+            if self.download_task_tree.exists(iid):iid=f"{iid}-history"
+            self.download_task_tree.insert("","end",iid=iid,values=(task.get("updated_at","")[:16].replace("T"," "),label,task.get("summary",""),task.get("product_count",0),f"{int(task.get('progress',0))}%",task.get("status",""),str(path)))
+            self.download_task_rows[iid]=task
+            if task.get("task_id")==selected_task_id:self.download_task_tree.selection_set(iid)
+            if task.get("task_type")!="download" or not scan_products or not path.exists():continue
+            root=path if path.is_dir() else path.parent
+            try:entries=self._discover_archive_folders(source,root)
+            except (OSError,PermissionError):entries=[]
+            for folder,count,name in entries:
+                resolved=str(folder.resolve());products.setdefault(resolved,{"folder":folder,"source":source,"name":name,"supplier":folder.parent.name,"count":count,"task":task})
+        if not scan_products:return
+        self.download_product_tree.delete(*self.download_product_tree.get_children());self.download_product_rows={}
+        archive_paths={}
+        if self.output.exists():
+            try:archive_paths={str(p.parent.resolve()) for p in self.output.rglob("产品档案.json")}
+            except OSError:pass
+        for index,(path,item) in enumerate(sorted(products.items(),key=lambda pair:(pair[1]["source"],pair[1]["name"].casefold()))):
+            iid=f"download-{index}";item["checked"]=path in checked_paths
+            archived=path in archive_paths
+            values=("☑" if item["checked"] else "☐",item["source"],item["name"],item["supplier"],item["count"],"已建档" if archived else "待建档",path)
+            self.download_product_tree.insert("","end",iid=iid,values=values);self.download_product_rows[iid]=item
+        count=sum(item["count"] for item in products.values())
+        self.download_product_summary.set(f"{task_count} 条下载记录 · {len(products)} 款产品 · {count} 个文件")
+        self._update_download_selection_count()
+
+    def _selected_download_task(self):
+        if not hasattr(self,"download_task_tree"):return None
+        selected=self.download_task_tree.selection()
+        return self.download_task_rows.get(selected[0]) if selected else None
+
+    def _show_download_task_detail(self,_event=None):
+        row=self._selected_download_task()
+        if row:self.download_task_detail.set(row.get("detail") or "此任务暂无附加详情。")
+
+    def open_selected_download_task_folder(self):
+        row=self._selected_download_task()
+        if not row:return messagebox.showinfo(APP_NAME,"请先选择下载任务。")
+        path=Path(row.get("output_path") or "")
+        if path.exists():os.startfile(str(path if path.is_dir() else path.parent))
+        else:messagebox.showinfo(APP_NAME,"下载目录已不存在。")
+
+    def delete_selected_download_task(self):
+        row=self._selected_download_task()
+        if not row:return messagebox.showinfo(APP_NAME,"请先选择下载记录。")
+        if messagebox.askyesno(APP_NAME,"只删除这条下载任务记录，不会删除原始文件或标准档案。"):
+            delete_tasks([row["task_id"]]);self.refresh_download_board()
+
+    def _toggle_download_product(self,event):
+        tree=self.download_product_tree
+        if tree.identify_column(event.x)!="#1":return
+        iid=tree.identify_row(event.y)
+        if not iid or iid not in self.download_product_rows:return
+        item=self.download_product_rows[iid];item["checked"]=not item["checked"]
+        values=list(tree.item(iid,"values"));values[0]="☑" if item["checked"] else "☐";tree.item(iid,values=values)
+        self._update_download_selection_count();return "break"
+
+    def _set_download_checks(self,checked):
+        for iid,item in self.download_product_rows.items():
+            item["checked"]=checked;values=list(self.download_product_tree.item(iid,"values"));values[0]="☑" if checked else "☐";self.download_product_tree.item(iid,values=values)
+        self._update_download_selection_count()
+
+    def _update_download_selection_count(self):
+        if hasattr(self,"download_selection_label"):self.download_selection_label.set(f"已选择 {sum(1 for item in self.download_product_rows.values() if item['checked'])} 款")
+
+    def _selected_download_products(self):return [item for item in getattr(self,"download_product_rows",{}).values() if item["checked"]]
+
+    def open_selected_download_folder(self):
+        items=self._selected_download_products()
+        if not items:return messagebox.showinfo(APP_NAME,"请先勾选产品。")
+        os.startfile(str(items[0]["folder"].parent if len(items)>1 else items[0]["folder"]))
+
+    def delete_selected_downloads(self):
+        items=self._selected_download_products()
+        if not items:return messagebox.showinfo(APP_NAME,"请先勾选要删除的原始资料。")
+        names="\n".join(f"• {item['name']} — {item['folder']}" for item in items[:8])
+        if len(items)>8:names+=f"\n…另有 {len(items)-8} 款"
+        if not messagebox.askyesno(APP_NAME,f"将永久删除 {len(items)} 个产品原始文件夹及其中的文件：\n\n{names}\n\n此操作不会删除标准档案或下载任务记录。继续？"):return
+        for item in items:
+            folder=Path(item["folder"]).resolve()
+            if folder.is_dir():shutil.rmtree(folder)
+        self.refresh_download_board();self.status.set(f"已删除 {len(items)} 个原始资料文件夹。")
+
+    def archive_selected_downloads(self):
+        items=self._selected_download_products()
+        if not items:return messagebox.showinfo(APP_NAME,"请先勾选要初步建档的产品。")
+        self._create_selected_download_items(items)
+
+    def _create_selected_download_items(self,items):
+        task=create_task("import","下载资料初步建档",f"已选择 {len(items)} 款产品",str(self.output));self.status.set(f"正在初步建档：0/{len(items)}")
+        def work():
+            made=[];details=[]
+            try:
+                rows=[]
+                for i,item in enumerate(items,1):
+                    folder=Path(item["folder"]);source=item["source"]
+                    if source=="Yupoo":
+                        archives=standardize_yupoo_downloads(folder.parent,self.output,selected_folders=[folder]);
+                        for archive in archives:
+                            try:made.append((archive,json.loads((archive/"产品档案.json").read_text(encoding="utf-8"))))
+                            except (OSError,ValueError):pass
+                    else:
+                        source_name="1688" if source=="1688" else "本地资料";info_item=self._make_source_batch_item(folder,source_name,rows)
+                        path,manifest=make_product_package(info_item["info"],None,self.output,info_item["values"],info_item.get("main_image",""));made.append((path,manifest))
+                    update_task(task,status=f"建档中 {i}/{len(items)}",product_count=i,output_path=str(self.output),detail=f"{item['name']} 已处理",progress=i*100/len(items))
+                    self.after(0,lambda n=i,total=len(items):self.status.set(f"正在初步建档：{n}/{total}"))
+                self.after(0,lambda:self._finish_selected_archives(task,made,"下载资料"))
+            except Exception as e:
+                detail=f"{type(e).__name__}: {e}";update_task(task,status="失败",product_count=len(made),output_path=str(self.output),detail=detail,progress=len(made)*100/len(items));self.after(0,lambda:self.status.set(f"初步建档失败：{detail}"))
+        threading.Thread(target=work,daemon=True).start()
+
+    def export_selected_downloads(self,kind):
+        items=self._selected_download_products()
+        if not items:return messagebox.showinfo(APP_NAME,"请先勾选要导出的产品。")
+        output=Path(self.output)
+        target=output/"批量导出";target.mkdir(parents=True,exist_ok=True)
+        stamp=datetime.now().strftime("%Y%m%d_%H%M%S")
+        task=create_task("import","采集资料导出",f"{len(items)} 款产品 · {kind.upper()}",str(target));update_task(task,status="正在导出",product_count=0,output_path=str(target),progress=0)
+        try:
+            if kind=="excel":
+                from openpyxl import Workbook
+                book=Workbook();sheet=book.active;sheet.title="采集资料清单";sheet.append(["来源","产品名称","供应商","文件数","原始文件夹","建档状态"])
+                for item in items:
+                    archived=Path(self.output)/safe_stem(item["supplier"])/safe_stem(item["name"])/"产品档案.json"
+                    sheet.append([item["source"],item["name"],item["supplier"],item["count"],str(item["folder"]),"已建档" if archived.exists() else "待建档"])
+                path=target/f"采集资料_{stamp}.xlsx";book.save(path)
+            else:
+                from reportlab.lib.pagesizes import A4
+                from reportlab.pdfbase import pdfmetrics
+                from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+                from reportlab.platypus import SimpleDocTemplate,Paragraph,Spacer,Table,TableStyle
+                from reportlab.lib import colors
+                from reportlab.lib.styles import getSampleStyleSheet,ParagraphStyle
+                pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"));styles=getSampleStyleSheet();styles.add(ParagraphStyle(name="Chinese",parent=styles["BodyText"],fontName="STSong-Light",fontSize=10,leading=16));styles.add(ParagraphStyle(name="ChineseTitle",parent=styles["Title"],fontName="STSong-Light"))
+                path=target/f"采集资料_{stamp}.pdf";doc=SimpleDocTemplate(str(path),pagesize=A4);story=[Paragraph("采集资料批次清单",styles["ChineseTitle"]),Spacer(1,12)]
+                data=[["来源","产品名称","供应商","文件数"]]+[[item["source"],item["name"],item["supplier"],str(item["count"])] for item in items]
+                table=Table(data,repeatRows=1,colWidths=[75,175,110,55]);table.setStyle(TableStyle([("FONTNAME",(0,0),(-1,-1),"STSong-Light"),("BACKGROUND",(0,0),(-1,0),colors.HexColor("#eaf0eb")),("GRID",(0,0),(-1,-1),0.4,colors.HexColor("#d5ddd7")),("VALIGN",(0,0),(-1,-1),"TOP"),("PADDING",(0,0),(-1,-1),7)]));story.append(table)
+                for item in items:story.extend([Spacer(1,8),Paragraph(f"{item['name']}　原始目录：{item['folder']}",styles["Chinese"])])
+                doc.build(story)
+            update_task(task,status="导出完成",product_count=len(items),output_path=str(path),detail=f"已导出 {len(items)} 款产品。",progress=100)
+            self.status.set(f"已生成 {path}");self.refresh_download_board();messagebox.showinfo(APP_NAME,f"已导出 {len(items)} 款产品：\n{path}")
+        except Exception as e:
+            update_task(task,status="导出失败",output_path=str(target),detail=str(e),progress=0);self.refresh_download_board();messagebox.showerror(APP_NAME,f"导出失败：{e}")
 
     def _file_row(self,parent,label,var,directory):
         row=ttk.Frame(parent,style="Card.TFrame"); row.pack(fill="x",pady=5); ttk.Label(row,text=label,width=20,anchor="w",background="white").pack(side="left")
@@ -469,23 +673,25 @@ class Workbench(tk.Tk):
         ttk.Button(actions,text="初步生成标准档案",style="Accent.TButton",command=begin).pack(side="right")
 
     def _create_selected_archives(self,source_type,root,folders,excel=None):
-        task=create_task("import",f"{source_type}初步建档",f"已选择 {len(folders)} 款产品",str(self.output))
+        task=create_task("import",f"{source_type}初步建档",f"已选择 {len(folders)} 款产品",str(self.output));update_task(task,status="建档中 0%",product_count=0,output_path=str(self.output),progress=0)
         self.status.set(f"正在为所选 {len(folders)} 款{source_type}产品生成标准档案…")
         def work():
             try:
                 if source_type=="Yupoo":
+                    update_task(task,status="建档中",product_count=0,output_path=str(self.output),progress=5)
                     archives=standardize_yupoo_downloads(root,self.output,selected_folders=folders)
                     made=[(path,json.loads((path/"产品档案.json").read_text(encoding="utf-8"))) for path in archives]
                 else:
                     rows=read_product_rows(excel) if excel and Path(excel).is_file() else []
                     made=[]
-                    for folder in folders:
+                    for index,folder in enumerate(folders,1):
                         item=self._make_source_batch_item(folder,source_type,rows)
                         path,manifest=make_product_package(item["info"],None,self.output,item["values"],item.get("main_image",""))
                         made.append((path,manifest))
+                        update_task(task,status=f"建档中 {index}/{len(folders)}",product_count=index,output_path=str(self.output),progress=index*100/len(folders))
                 self.after(0,lambda:self._finish_selected_archives(task,made,source_type))
             except Exception as e:
-                detail=f"{type(e).__name__}: {e}";update_task(task,status="失败",output_path=str(self.output),detail=detail)
+                detail=f"{type(e).__name__}: {e}";update_task(task,status="失败",output_path=str(self.output),detail=detail,progress=0)
                 self.after(0,lambda:self.status.set(f"{source_type}初步建档失败：{detail}"))
         threading.Thread(target=work,daemon=True).start()
 
@@ -519,7 +725,8 @@ class Workbench(tk.Tk):
             self.package_list.delete(0,"end")
             for path,manifest in made:self.package_list.insert("end",f"{manifest.get('name','产品')}  ·  {'待补：'+'、'.join(manifest.get('missing_fields',[])) if manifest.get('missing_fields') else '可复核'}  ·  {path}")
         self.load_standard_archives(archives)
-        update_task(task,status="初步建档完成",product_count=len(made),output_path=str(self.output),detail=f"已生成 {len(made)} 款标准档案，原始目录已保留。")
+        update_task(task,status="初步建档完成",product_count=len(made),output_path=str(self.output),detail=f"已生成 {len(made)} 款标准档案，原始目录已保留。",progress=100)
+        if hasattr(self,"download_product_tree"):self.refresh_download_board()
         self.status.set(f"已为 {len(made)} 款{source_type}产品初步生成标准档案，并打开产品复核。")
 
     def start_yupoo(self):
@@ -548,8 +755,9 @@ class Workbench(tk.Tk):
         if hasattr(self.yupoo_app,"archive_summary"):
             self.yupoo_app.archive_summary.set(f"已发现 {len(albums)} 个相册、{count} 张图片；可勾选后初步建档。")
         task_id=getattr(self.yupoo_app,"task_id","")
-        if task_id:update_task(task_id,status=f"下载完成：{len(albums)} 款产品",product_count=len(albums),output_path=str(root),detail=f"图片/文件合计：{count}\n{summary}")
+        if task_id:update_task(task_id,status=f"下载完成：{len(albums)} 款产品",product_count=len(albums),output_path=str(root),detail=f"图片/文件合计：{count}\n{summary}",progress=100)
         self.status.set(f"又拍下载完成：{len(albums)} 个相册、{count} 张图片；原始资料已保留。")
+        if hasattr(self,"download_product_tree"):self.refresh_download_board()
 
     def start_1688(self):
         self.show_collect_source("1688")
@@ -572,10 +780,12 @@ class Workbench(tk.Tk):
                     record_source("1688/OpenCLI",result["supplier"],result["title"],str(path),url,"待复核",["箱规尺寸","单箱毛重"])
                     completed.append(path);results.append(f"成功：{result['title']} — {url}")
                 except Exception as e:results.append(f"失败：{url} — {type(e).__name__}: {e}")
+                progress=index*100/len(urls);detail="\n".join(results)
+                update_task(task,status=f"下载中 {index}/{len(urls)}",product_count=len(completed),output_path=str(output),detail=detail,progress=progress)
                 self.after(0,lambda i=index,n=len(urls):self.status.set(f"正在调用 OpenCLIApp（{i}/{n}）…"))
             ok=sum(line.startswith("成功：") for line in results);failed=len(results)-ok
             state=f"下载完成：成功 {ok} / 失败 {failed}" if ok else "失败"
-            update_task(task,status=state,product_count=ok,output_path=str(output),detail="\n".join(results))
+            update_task(task,status=state,product_count=ok,output_path=str(output),detail="\n".join(results),progress=100 if ok==len(urls) else len(completed)*100/len(urls))
             self.after(0,lambda:self._finish_1688_collection(output,ok,failed))
         threading.Thread(target=work,daemon=True).start()
 
@@ -585,6 +795,7 @@ class Workbench(tk.Tk):
         if hasattr(self,"cli_download_summary"):
             self.cli_download_summary.set(f"已发现 {len(products)} 款产品、{files} 个素材文件；可勾选后初步建档。")
         self.status.set(f"OpenCLIApp 下载完成：成功 {ok}，失败 {failed}；共 {len(products)} 款、{files} 个文件。")
+        if hasattr(self,"download_product_tree"):self.refresh_download_board()
 
     def get_cli_urls(self):
         if not hasattr(self,"cli_urls"):return []
@@ -630,7 +841,7 @@ class Workbench(tk.Tk):
         task=create_task("download","Excel/本地资料",str(folder or excel),str(folder or excel.parent))
         try:
             self.load_import(folder or excel.parent,excel)
-            update_task(task,status="导入完成",product_count=len(self.batch),output_path=str(folder or excel.parent),detail=f"已识别 {len(self.batch)} 款产品。")
+            update_task(task,status="导入完成",product_count=len(self.batch),output_path=str(folder or excel.parent),detail=f"已识别 {len(self.batch)} 款产品。",progress=100)
         except Exception as e:
             update_task(task,status="失败",output_path=str(folder or excel.parent),detail=str(e)); messagebox.showerror(APP_NAME,str(e))
 
@@ -809,6 +1020,72 @@ class Workbench(tk.Tk):
         ttk.Button(actions,text="上传已生成档案",style="Accent.TButton",command=self.upload).pack(side="left",padx=10,ipady=1)
         self.package_list=tk.Listbox(p,height=12,font=("Microsoft YaHei UI",11),relief="flat",highlightthickness=1,highlightbackground=self.ui["line"],background="white",foreground=self.ui["ink"],selectbackground=self.ui["green_soft"],selectforeground=self.ui["ink"],activestyle="none");self.package_list.pack(fill="both",expand=True)
         self.package_list.bind("<<ListboxSelect>>",self.select_package)
+        board=ttk.Frame(p,padding=(0,10,0,0));board.pack(fill="both",expand=True)
+        title=ttk.Frame(board);title.pack(fill="x")
+        ttk.Label(title,text="上传任务与进度",font=("Microsoft YaHei UI",12,"bold")).pack(side="left")
+        ttk.Button(title,text="刷新",style="Compact.TButton",command=self.refresh_upload_board).pack(side="right")
+        self.upload_task_tree=ttk.Treeview(board,columns=("time","summary","count","progress","status","path"),show="headings",height=5,selectmode="browse")
+        for col,label,width in (("time","时间",130),("summary","上传批次",200),("count","产品数",70),("progress","进度",70),("status","状态",180),("path","档案目录",300)):
+            self.upload_task_tree.heading(col,text=label);self.upload_task_tree.column(col,width=width,stretch=col in {"summary","path"})
+        self.upload_task_tree.pack(fill="both",expand=True,pady=(5,0))
+        self.upload_task_tree.bind("<<TreeviewSelect>>",self._show_upload_task_detail)
+        self.upload_task_detail=tk.StringVar(value="选择一条任务查看上传结果或失败原因。")
+        ttk.Label(board,textvariable=self.upload_task_detail,style="Muted.TLabel",wraplength=1000,justify="left").pack(fill="x",pady=(4,0))
+        footer=ttk.Frame(board);footer.pack(fill="x",pady=(5,0))
+        ttk.Button(footer,text="打开档案目录",style="Compact.TButton",command=self.open_selected_upload_folder).pack(side="left")
+        ttk.Button(footer,text="重试失败产品",style="Compact.TButton",command=self.retry_selected_upload).pack(side="left",padx=5)
+        ttk.Button(footer,text="删除任务记录",style="Compact.TButton",command=self.delete_selected_upload_task).pack(side="left")
+        self.refresh_upload_board()
+
+    def refresh_upload_board(self):
+        if not hasattr(self,"upload_task_tree"):return
+        selected=self.upload_task_tree.selection();selected_id=selected[0] if selected else None
+        rows=list_all_tasks("upload");tree=self.upload_task_tree;tree.delete(*tree.get_children());self.upload_rows={}
+        for row in rows:
+            self.upload_rows[row["task_id"]]=row
+            tree.insert("","end",iid=row["task_id"],values=(row.get("updated_at","")[:16].replace("T"," "),row.get("summary",""),row.get("product_count",0),f"{int(row.get('progress',0))}%",row.get("status",""),row.get("output_path","")))
+            if row["task_id"]==selected_id:tree.selection_set(selected_id)
+
+    def _selected_upload_task(self):
+        if not hasattr(self,"upload_task_tree"):return None
+        selection=self.upload_task_tree.selection()
+        return self.upload_rows.get(selection[0]) if selection else None
+
+    def _show_upload_task_detail(self,_event=None):
+        row=self._selected_upload_task()
+        if row:self.upload_task_detail.set(row.get("detail") or "此任务暂无附加详情。")
+
+    def open_selected_upload_folder(self):
+        row=self._selected_upload_task()
+        if not row:return messagebox.showinfo(APP_NAME,"请先选择上传任务。")
+        path=Path(row.get("output_path") or "")
+        if path.exists():os.startfile(str(path))
+        else:messagebox.showinfo(APP_NAME,"档案目录已不存在。")
+
+    def delete_selected_upload_task(self):
+        row=self._selected_upload_task()
+        if not row:return messagebox.showinfo(APP_NAME,"请先选择上传任务。")
+        if messagebox.askyesno(APP_NAME,"只删除这条上传任务记录，不会删除产品档案。"):
+            delete_tasks([row["task_id"]]);self.refresh_upload_board()
+
+    def retry_selected_upload(self):
+        row=self._selected_upload_task()
+        if not row:return messagebox.showinfo(APP_NAME,"请先选择上传任务。")
+        root=Path(row.get("output_path") or "");failed=[]
+        for line in row.get("detail","").splitlines():
+            if ": " in line and not line.endswith(": 成功"):failed.append(line.split(": ",1)[0])
+        if not failed:return messagebox.showinfo(APP_NAME,"这条上传任务没有失败产品记录。")
+        found=[]
+        if root.exists():
+            for manifest_path in root.rglob("产品档案.json"):
+                try:
+                    data=json.loads(manifest_path.read_text(encoding="utf-8"))
+                    if not failed or data.get("name") in failed:found.append((manifest_path.parent,data))
+                except (OSError,ValueError):pass
+        if not found:return messagebox.showinfo(APP_NAME,"没有找到这条任务中待重试的标准档案。")
+        self.packages=found;self.package_list.delete(0,"end")
+        for folder,manifest in found:self.package_list.insert("end",f"{manifest.get('name','产品')}  ·  {folder}")
+        self.upload()
 
     def select_package(self,_=None):
         if not hasattr(self,"package_list") or not self.package_list.curselection():return
@@ -857,7 +1134,6 @@ class Workbench(tk.Tk):
             context["archives"]=[{"name":manifest.get("name"),"path":str(folder),"missing":manifest.get("missing_fields",[])} for folder,manifest in self.packages[:100]]
             context["selected_archive"]=getattr(self,"active_package",None)
             context["output_root"]=self.out_var.get() if hasattr(self,"out_var") else str(self.output)
-        elif self.current_module=="任务中心":context["selected_task"]=self.active_task
         elif self.current_module=="设置":
             context.update(ai_api=self.ai_url.get(),ai_model=self.ai_model.get(),xudaai_server=self.server.get() if hasattr(self,"server") else self.cfg.get("server","http://127.0.0.1:8002"),archive_output=self.out_var.get() if hasattr(self,"out_var") else str(self.output))
         return context
@@ -901,7 +1177,7 @@ class Workbench(tk.Tk):
         if source=="1688/OpenCLI":
             self.set_cli_urls(planned_url);self.start_1688();self._chat_line("系统","已确认，正在调用本机 OpenCLIApp。完成后可在当前采集页查看商品数量、勾选并初步建档。")
         else:
-            self.start_yupoo_with_url(planned_url);self._chat_line("系统","已确认，正在使用嵌入的又拍采集器下载资料。状态见任务中心。")
+            self.start_yupoo_with_url(planned_url);self._chat_line("系统","已确认，正在使用嵌入的又拍采集器下载资料。进度和原始文件清单可在当前采集工作台查看。")
 
     def start_yupoo_with_url(self,url):
         if "采集与导入" not in self.pages or not hasattr(self,"yupoo_app"):self.show("采集与导入")
@@ -941,26 +1217,32 @@ class Workbench(tk.Tk):
         gaps=sum(bool(manifest.get("missing_fields")) for _,manifest in self.packages)
         if not messagebox.askyesno(APP_NAME,f"确认上传 {len(self.packages)} 款产品？其中 {gaps} 款仍有必填资料缺项。"):
             return
-        task=create_task("upload","Xudaai",f"上传 {len(self.packages)} 个产品",self.out_var.get())
-        update_task(task,status="上传中",product_count=len(self.packages),output_path=self.out_var.get())
+        packages=list(self.packages);server=self.server.get().strip();username=self.user.get();password=self.password.get();output_path=self.out_var.get()
+        task=create_task("upload","Xudaai",f"上传 {len(packages)} 个产品",output_path)
+        update_task(task,status=f"上传中 0/{len(packages)}",product_count=0,output_path=output_path,progress=0)
+        self.refresh_upload_board()
         def work():
             result=[]
-            for folder,manifest in self.packages:
+            for index,(folder,manifest) in enumerate(packages,1):
                 streams=[];parts=[]
                 try:
                     for f in folder.rglob("*"):
                         if f.is_file():
                             stream=f.open("rb");streams.append(stream);parts.append(("files",(f.relative_to(folder).as_posix(),stream,mimetypes.guess_type(f.name)[0] or "application/octet-stream")))
-                    auth=(self.user.get(),self.password.get()) if self.password.get() else None
-                    r=httpx.post(self.server.get().rstrip("/")+"/api/products/import",data={"manifest":json.dumps(manifest,ensure_ascii=False)},files=parts,auth=auth,timeout=900)
+                    auth=(username,password) if password else None
+                    r=httpx.post(server.rstrip("/")+"/api/products/import",data={"manifest":json.dumps(manifest,ensure_ascii=False)},files=parts,auth=auth,timeout=900)
                     if r.status_code>=400:raise RuntimeError(r.json().get("detail",f"HTTP {r.status_code}"))
                     result.append((manifest.get("name"),"成功"))
                 except Exception as e:result.append((manifest.get("name"),str(e)))
                 finally:
                     for f in streams:f.close()
+                done=sum(name_result=="成功" for _,name_result in result)
+                progress=index*100/len(packages);detail="\n".join(f"{n}: {s}" for n,s in result)
+                update_task(task,status=f"上传中 {index}/{len(packages)}（成功 {done}）",product_count=index,output_path=output_path,detail=detail,progress=progress)
+                self.after(0,lambda i=index,total=len(packages),d=done:self.status.set(f"正在上传：{i}/{total}，成功 {d}"))
             detail="\n".join(f"{n}: {s}" for n,s in result); ok=sum(s=="成功" for _,s in result)
-            update_task(task,status=f"完成：成功 {ok} / 失败 {len(result)-ok}",product_count=len(result),output_path=self.out_var.get(),detail=detail)
-            self.after(0,lambda:self.status.set(f"上传完成：成功 {ok}，失败 {len(result)-ok}。"))
+            update_task(task,status=f"完成：成功 {ok} / 失败 {len(result)-ok}",product_count=len(result),output_path=output_path,detail=detail,progress=100)
+            self.after(0,lambda:self.status.set(f"上传完成：成功 {ok}，失败 {len(result)-ok}。"));self.after(0,self.refresh_upload_board)
         threading.Thread(target=work,daemon=True).start()
 
     def build_tasks(self,p):

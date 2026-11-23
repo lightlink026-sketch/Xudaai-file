@@ -19,8 +19,12 @@ def _connect() -> sqlite3.Connection:
         summary TEXT NOT NULL DEFAULT '', supplier TEXT NOT NULL DEFAULT '',
         product_count INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'queued',
         output_path TEXT NOT NULL DEFAULT '', detail TEXT NOT NULL DEFAULT '',
-        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        progress REAL NOT NULL DEFAULT 0
     )""")
+    columns = {row[1] for row in db.execute("PRAGMA table_info(tasks)")}
+    if "progress" not in columns:
+        db.execute("ALTER TABLE tasks ADD COLUMN progress REAL NOT NULL DEFAULT 0")
     db.commit()
     return db
 
@@ -29,16 +33,20 @@ def create_task(task_type: str, source_type: str, summary: str, output_path: str
     task_id = uuid.uuid4().hex
     now = datetime.now().isoformat(timespec="seconds")
     with _connect() as db:
-        db.execute("INSERT INTO tasks(task_id,task_type,source_type,summary,output_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                   (task_id, task_type, source_type, summary, output_path, now, now))
+        db.execute("INSERT INTO tasks(task_id,task_type,source_type,summary,output_path,created_at,updated_at,progress) VALUES(?,?,?,?,?,?,?,?)",
+                   (task_id, task_type, source_type, summary, output_path, now, now, 0))
     return task_id
 
 
 def update_task(task_id: str, *, status: str, supplier: str = "", product_count: int = 0,
-                output_path: str = "", detail: str = "") -> None:
+                output_path: str = "", detail: str = "", progress: float | None = None) -> None:
     with _connect() as db:
-        db.execute("UPDATE tasks SET status=?,supplier=?,product_count=?,output_path=?,detail=?,updated_at=? WHERE task_id=?",
-                   (status, supplier, int(product_count), output_path, detail[:12000], datetime.now().isoformat(timespec="seconds"), task_id))
+        if progress is None:
+            db.execute("UPDATE tasks SET status=?,supplier=?,product_count=?,output_path=?,detail=?,updated_at=? WHERE task_id=?",
+                       (status, supplier, int(product_count), output_path, detail[:12000], datetime.now().isoformat(timespec="seconds"), task_id))
+        else:
+            db.execute("UPDATE tasks SET status=?,supplier=?,product_count=?,output_path=?,detail=?,progress=?,updated_at=? WHERE task_id=?",
+                       (status, supplier, int(product_count), output_path, detail[:12000], max(0, min(100, float(progress))), datetime.now().isoformat(timespec="seconds"), task_id))
 
 
 def list_tasks(task_type: str = "all", query: str = "", page: int = 1, page_size: int = 25) -> tuple[list[dict[str, Any]], int]:
@@ -54,6 +62,17 @@ def list_tasks(task_type: str = "all", query: str = "", page: int = 1, page_size
         total = db.execute(f"SELECT COUNT(*) FROM tasks{where}", args).fetchone()[0]
         rows = db.execute(f"SELECT * FROM tasks{where} ORDER BY created_at DESC LIMIT ? OFFSET ?", [*args, page_size, (max(1, page)-1)*page_size]).fetchall()
     return [dict(row) for row in rows], total
+
+
+def list_all_tasks(task_type: str = "all") -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        batch, total = list_tasks(task_type, page=page, page_size=200)
+        rows.extend(batch)
+        if len(rows) >= total or not batch:
+            return rows
+        page += 1
 
 
 def delete_tasks(task_ids: list[str]) -> int:

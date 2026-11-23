@@ -641,6 +641,7 @@ class App:
         if mode=='all' and not self.make_xlsx.get() and not self.make_pdf.get():messagebox.showerror('未选择输出','至少选择生成 Excel 或 PDF。');return
         self.run_url=self.url.get('1.0','end').strip(); self.run_dest=self.dest.get().strip(); self.run_flags=(bool(self.make_xlsx.get()),bool(self.make_pdf.get()));self.run_force=bool(self.force_download.get())
         self.task_id=create_task('download','Yupoo',self.run_url,self.run_dest)
+        update_task(self.task_id,status='准备中',product_count=0,output_path=self.run_dest,progress=0)
         self.busy=True;self.start.configure(state='disabled')
         for b in self.action_buttons:b.configure(state='disabled')
         self.progress.start(12)
@@ -658,20 +659,22 @@ class App:
                 if account.lower() in ('www','x','yupoo'):account='Yupoo'
                 groups.setdefault(account,[]).append(url)
             if not groups:raise RuntimeError('没有可处理的 URL。')
-            summaries=[]
-            for index,(account,links) in enumerate(groups.items(),1):
+            summaries=[];accounts=list(groups.items())
+            for index,(account,links) in enumerate(accounts,1):
                 self.log(f'批次 {index}/{len(groups)}：账号 {account}，链接 {len(links)} 个。')
+                self._progress_base=(index-1)*100/len(accounts);self._progress_span=100/len(accounts)
                 try:summaries.append(self.run_account_job(mode,account,links))
                 except Exception as e:
                     self.log(f'账号 {account} 处理失败：{type(e).__name__}: {e}')
                     self.log(traceback.format_exc());summaries.append(f'{account}: 失败 - {type(e).__name__}: {e}')
+                update_task(self.task_id,status=f'下载中 {index}/{len(accounts)}',product_count=index,output_path=self.run_dest,detail='\n\n'.join(summaries),progress=index*100/len(accounts))
             failed=bool(summaries) and all('失败 -' in x for x in summaries)
             status='失败' if failed else ('完成' if summaries and all('失败' not in x for x in summaries) else '部分失败')
             detail='\n\n'.join(summaries)
-            update_task(self.task_id,status=status,product_count=len(urls),output_path=self.run_dest,detail=detail)
+            update_task(self.task_id,status=status,product_count=len(urls),output_path=self.run_dest,detail=detail,progress=100 if status!='失败' else 0)
             self.q.put(('error' if failed else 'done',detail))
         except Exception as e:
-            update_task(self.task_id,status='失败',output_path=self.run_dest,detail=str(e)+'\n'+traceback.format_exc())
+            update_task(self.task_id,status='失败',output_path=self.run_dest,detail=str(e)+'\n'+traceback.format_exc(),progress=0)
             self.q.put(('error',str(e)+'\n'+traceback.format_exc()))
     def run_account_job(self,mode,account,links):
         selected_root=Path(self.run_dest)
@@ -762,6 +765,8 @@ class App:
                 qr_path=folder/'QR.png';qrcode.make(a['url']).save(qr_path);a['qr_path']=str(qr_path)
                 (folder/'info.json').write_text(json.dumps(a,ensure_ascii=False,indent=2),encoding='utf-8')
                 self.log(f'  {len(saved)}/{len(imgs)} 张图片，封面 {Path(cover_path).name if cover_path else "缺失"}')
+                progress=min(95,self._progress_base+self._progress_span*(i/max(1,len(albums))))
+                update_task(self.task_id,status=f'下载中：{account} {i}/{len(albums)}',product_count=i,output_path=self.run_dest,progress=progress)
             # Collapse historical duplicate folders, preserving the richest product TXT.
             ids_now=set()
             for folder in list(root.iterdir()):
