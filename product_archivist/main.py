@@ -127,7 +127,7 @@ class Workbench(tk.Tk):
         self.chat=tk.Text(chat_frame,height=8,wrap="word",font=("Microsoft YaHei UI",13),state="disabled",relief="flat",padx=16,pady=14,background="white",foreground=self.ui["ink"])
         self.chat.tag_configure("speaker",foreground="#35664f",font=("Microsoft YaHei UI",12,"bold"))
         scroll=ttk.Scrollbar(chat_frame,orient="vertical",command=self.chat.yview);self.chat.configure(yscrollcommand=scroll.set);self.chat.pack(side="left",fill="both",expand=True);scroll.pack(side="right",fill="y")
-        compose=ttk.Frame(self.ai_panel,style="Card.TFrame",padding=10);compose.pack(side="bottom",fill="x",pady=(8,0))
+        compose=ttk.Frame(self.ai_panel,style="Card.TFrame",padding=10);compose.pack(side="bottom",fill="x",pady=(8,18))
         ttk.Label(compose,text="向当前模块助手提问",font=("Microsoft YaHei UI",11,"bold"),background="white").pack(anchor="w",pady=(0,5))
         self.prompt_placeholder="例如：帮我检查当前资料；也可以粘贴链接"
         self.prompt=tk.Text(compose,height=3,wrap="word",font=("Microsoft YaHei UI",13),relief="flat",borderwidth=0,padx=6,pady=8,background="white",foreground=self.ui["ink"])
