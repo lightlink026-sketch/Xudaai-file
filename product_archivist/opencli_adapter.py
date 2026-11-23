@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -12,6 +13,21 @@ from pathlib import Path
 from typing import Any
 
 from core import file_sha256, make_product_package, safe_stem, scan_product_folder
+
+
+def _ensure_xudaai_1688_adapter() -> Path:
+    """Install the app's private 1688 DOM/media adapter for the local OpenCLI user."""
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    source = bundle_root / "opencli_1688_product.js"
+    if not source.is_file():
+        raise RuntimeError(f"缺少 1688 商品采集适配器：{source}")
+    target = Path.home() / ".opencli" / "clis" / "1688" / "xudaai-product.js"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if not target.is_file() or file_sha256(target) != file_sha256(source):
+        temporary = target.with_suffix(".js.tmp")
+        shutil.copy2(source, temporary)
+        temporary.replace(target)
+    return target
 
 
 def _opencli(configured: str | None = None) -> str:
@@ -200,7 +216,7 @@ def _write_1688_archive_details(destination: Path, details: dict[str, Any], sour
         key: details.get(key) for key in ("customization_text", "moq_text", "delivery_days_text", "origin_place")
         if details.get(key) not in (None, "")
     }
-    certificate_blocks = details.get("qualification_certificates") or details.get("certificates") or []
+    certificate_blocks = details.get("qualification_info") or details.get("qualification_certificates") or details.get("certificates") or []
     record_base = {"source": "1688 item / assets", "source_url": source_url,
                    "collected_at": details.get("fetched_at", ""), "offer_id": details.get("offer_id", "")}
     specs_dir = destination / "规格与包装"
@@ -338,6 +354,7 @@ def download_1688_shop_products(url: str, output_root: Path, executable: str | N
         raise ValueError("shop-products 最大页数必须在 1–100 之间。")
     output_root = output_root.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    _ensure_xudaai_1688_adapter()
 
     if "/factory/" in url.lower():
         if on_progress:
@@ -431,12 +448,30 @@ def download_1688_shop_products(url: str, output_root: Path, executable: str | N
                             "sales_text": sales, "image_url": image_url, "page": page,
                             "_source_url": source_url, "store_url": offerlist_url, "shop_id": shop_id})
             if on_progress:
-                on_progress(f"商品处理 {item_number}/{total_rows}：使用 1688 assets 识别并下载图片/视频")
+                on_progress(f"商品处理 {item_number}/{total_rows}：读取商品属性和包装标签，识别图片/视频并按视频链接去重")
             try:
-                # The download command uses the same assets extractor internally, then persists
-                # its main/SKU/detail/other images and videos beneath assets_dir/<offer_id>/.
-                _run(["1688", "download", offer_id, "--output", str(assets_dir), "--format", "json"],
-                     timeout=900, executable=executable, profile=profile)
+                local_appdata = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+                video_cache = local_appdata / "Xudaai产品档案工作台" / "1688视频缓存"
+                media_output = _json_payload(_run(
+                    ["1688", "xudaai-product", offer_id, "--output", str(assets_dir),
+                     "--videoCache", str(video_cache), "--format", "json"],
+                    timeout=900, executable=executable, profile=profile))
+                media_payload = _first_dict(media_output)
+                if not media_payload:
+                    raise RuntimeError("商品标签与素材命令未返回结构化结果。")
+                details["visible_attributes"] = media_payload.get("visible_attributes", details.get("visible_attributes", []))
+                details["packaging_info"] = media_payload.get("packaging_info", [])
+                details["qualification_info"] = media_payload.get("qualification_info", [])
+                details["page_sections_found"] = media_payload.get("page_sections_found", {})
+                details["assets"] = media_payload.get("assets", {})
+                failed_assets = [row for row in (details["assets"].get("image_results", []) + details["assets"].get("video_results", []))
+                                 if row.get("status") != "success"]
+                missing_sections = [name for name, present in details["page_sections_found"].items() if not present]
+                if failed_assets:
+                    asset_error = f"素材下载失败 {len(failed_assets)} 项：" + "; ".join(str(row.get("error") or row.get("size") or row.get("filename") or "失败") for row in failed_assets[:4])
+                if missing_sections:
+                    section_note = "商品页未加载标签：" + "、".join(missing_sections)
+                    asset_error = f"{asset_error}；{section_note}" if asset_error else section_note
             except (RuntimeError, subprocess.TimeoutExpired) as exc:
                 asset_error = str(exc)
             metadata = json.dumps(details, ensure_ascii=False, indent=2)
