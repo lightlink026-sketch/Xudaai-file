@@ -578,8 +578,10 @@ class App:
         self.pdf_from_excel_button=ttk.Button(gen_row,text='选择 Excel 并生成 PDF',command=self.choose_excel_for_pdf);self.pdf_from_excel_button.pack(side='left');self.action_buttons.append(self.pdf_from_excel_button)
         if self.on_navigate:
             ttk.Label(controls,text='第四步  产品复核与标准档案',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
+            self.archive_summary=tk.StringVar(value='扫描又拍下载目录后，可勾选相册并查看图片数量。')
+            ttk.Label(controls,textvariable=self.archive_summary,style='Muted.TLabel').pack(anchor='w',pady=(0,4))
             archive_row=ttk.Frame(controls);archive_row.pack(fill='x',pady=(0,8))
-            ttk.Button(archive_row,text='选择文件夹初步生成标准档案',style='Accent.TButton',command=self.on_archive_folder).pack(side='left')
+            ttk.Button(archive_row,text='选择文件夹并勾选初步建档',style='Accent.TButton',command=self.on_archive_folder).pack(side='left')
         log_host=log_parent if embedded else main
         ttk.Label(log_host,text='运行进度与记录',style='Header.TLabel' if embedded else 'TLabel').pack(anchor='w',pady=(0,5))
         self.progress=ttk.Progressbar(log_host,mode='indeterminate');self.progress.pack(fill='x',pady=(0,8))
@@ -802,7 +804,7 @@ class App:
                     self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
                     if self.embedded:
                         self.log('处理完成。')
-                        if self.on_complete:self.on_complete(getattr(self,'callback_root',getattr(self,'run_dest',self.dest.get().strip())),msg)
+                        if self.last_mode in ('download','all') and self.on_complete:self.on_complete(getattr(self,'run_dest',self.dest.get().strip()),msg)
                     else:messagebox.showinfo('处理完成',msg)
                 elif kind=='sync_done':
                     self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False
@@ -810,7 +812,6 @@ class App:
                     if messagebox.askyesno('回写完成','Excel 字段已回写到各商品详情 TXT。\n是否立即根据所选 Excel 生成 PDF？'):
                         self.start_pdf_regeneration(Path(book_path),do_sync=False)
                     else:
-                        if self.embedded and self.on_complete:self.on_complete(getattr(self,'callback_root',str(root)),f'商品详情 TXT 已回写 {count} 行。\n{book_path}')
                         messagebox.showinfo('回写完成',f'标准档案商品详情已同步；Excel 保存在：\n{book_path}')
                 elif kind=='error':self.progress.stop();self.start.configure(state='normal');[b.configure(state='normal') for b in self.action_buttons];self.busy=False;self.logbox.configure(state='normal');self.logbox.insert('end',msg+'\n');self.logbox.see('end');self.logbox.configure(state='disabled');messagebox.showerror('处理失败',msg.splitlines()[0])
         except queue.Empty:pass

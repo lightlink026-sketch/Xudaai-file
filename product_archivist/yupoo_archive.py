@@ -31,10 +31,11 @@ def _copy_tree_files(source: Path, destination: Path) -> list[dict[str, str]]:
     return copied
 
 
-def standardize_yupoo_downloads(download_root: Path, archive_root: Path) -> list[Path]:
+def standardize_yupoo_downloads(download_root: Path, archive_root: Path, selected_folders: list[Path] | None = None) -> list[Path]:
     """Convert collector output directly into canonical product archive folders."""
     download_root = Path(download_root).resolve()
     archive_root = Path(archive_root).resolve()
+    selected = {Path(path).resolve() for path in selected_folders or []}
     manifests = sorted(download_root.rglob("info.json"))
     albums: list[tuple[Path, dict[str, Any]]] = []
     for manifest_path in manifests:
@@ -44,7 +45,7 @@ def standardize_yupoo_downloads(download_root: Path, archive_root: Path) -> list
             continue
         url = str(data.get("url") or "").strip()
         album_match = re.search(r"/albums/(\d+)", url)
-        if album_match:
+        if album_match and (not selected or manifest_path.parent.resolve() in selected):
             albums.append((manifest_path.parent, data))
     if not albums:
         raise ValueError("又拍下载目录中没有可转换的商品相册。")
