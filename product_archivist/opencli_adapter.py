@@ -42,7 +42,17 @@ def _run(args: list[str], timeout: int = 900, executable: str | None = None,
     deadline = time.monotonic() + timeout
     started_at = time.time()
     with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as captured:
-        process = subprocess.Popen(command, stdout=captured, stderr=subprocess.STDOUT, text=True)
+        launch_options: dict[str, Any] = {}
+        if os.name == "nt":
+            # OpenCLI is commonly configured through opencli.cmd. Without these
+            # flags, each background collection call opens a visible cmd.exe window.
+            startup_info = subprocess.STARTUPINFO()
+            startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startup_info.wShowWindow = subprocess.SW_HIDE
+            launch_options.update(startupinfo=startup_info,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        process = subprocess.Popen(command, stdout=captured, stderr=subprocess.STDOUT,
+                                   text=True, **launch_options)
         while process.poll() is None:
             current_progress = progress_file
             if progress_file and progress_file.is_dir():
