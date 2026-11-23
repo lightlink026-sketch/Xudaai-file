@@ -538,8 +538,8 @@ def load_albums_from_excel(book_path,log,image_dir):
     return result
 
 class App:
-    def __init__(self, root, embedded=False, on_complete=None, on_navigate=None):
-        self.root=root;self.embedded=embedded;self.on_complete=on_complete;self.on_navigate=on_navigate
+    def __init__(self, root, embedded=False, on_complete=None, on_navigate=None, on_archive_folder=None):
+        self.root=root;self.embedded=embedded;self.on_complete=on_complete;self.on_navigate=on_navigate;self.on_archive_folder=on_archive_folder
         if not embedded:
             root.title(APP_TITLE);root.geometry('880x720');root.minsize(760,620)
         self.q=queue.Queue();self.busy=False
@@ -579,8 +579,7 @@ class App:
         if self.on_navigate:
             ttk.Label(controls,text='第四步  产品复核与标准档案',style='Subhead.TLabel').pack(anchor='w',pady=(5,4))
             archive_row=ttk.Frame(controls);archive_row.pack(fill='x',pady=(0,8))
-            ttk.Button(archive_row,text='进入产品复核',style='Compact.TButton',command=lambda:self.on_navigate('产品复核')).pack(side='left',padx=(0,8))
-            ttk.Button(archive_row,text='生成标准档案',style='Accent.TButton',command=lambda:self.on_navigate('标准档案与上传')).pack(side='left')
+            ttk.Button(archive_row,text='选择文件夹初步生成标准档案',style='Accent.TButton',command=self.on_archive_folder).pack(side='left')
         log_host=log_parent if embedded else main
         ttk.Label(log_host,text='运行进度与记录',style='Header.TLabel' if embedded else 'TLabel').pack(anchor='w',pady=(0,5))
         self.progress=ttk.Progressbar(log_host,mode='indeterminate');self.progress.pack(fill='x',pady=(0,8))

@@ -318,7 +318,7 @@ class Workbench(tk.Tk):
         self.yupoo_tab=yup;self.cli_tab=cli;self.import_tab=imp
         # Embed the original Yupoo interface, including its PDF/Excel and
         # product detail write-back actions, instead of hiding those controls.
-        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete,on_navigate=self.show)
+        self.yupoo_app=YupooProcessor(yup,embedded=True,on_complete=self._yupoo_complete,on_navigate=self.show,on_archive_folder=self.prepare_yupoo_archive_folder)
         self.yupoo_app.dest.delete(0,"end");self.yupoo_app.dest.insert(0,str(self._yupoo_staging_root()))
         self.yupoo_urls=self.yupoo_app.url
         c=self._card(cli,"1688 链接采集","每行一个商品链接；可批量下载。AI 助手可分析单个链接并在确认后调用 OpenCLIApp。")
@@ -369,6 +369,29 @@ class Workbench(tk.Tk):
     def _yupoo_staging_root(self):
         local=Path(os.environ.get("LOCALAPPDATA",str(Path.home()/"AppData"/"Local")))
         return local/"Xudaai产品档案工作台"/"又拍临时下载"
+
+    def prepare_yupoo_archive_folder(self):
+        initial=self._yupoo_staging_root()
+        if not initial.exists():initial=Path.home()
+        selected=filedialog.askdirectory(title="选择又拍下载资料文件夹",initialdir=str(initial))
+        if not selected:return
+        source=Path(selected)
+        task=create_task("import","又拍目录转标准档案",str(source),str(self.output))
+        self.status.set("正在将所选又拍资料整理为标准档案…")
+        def work():
+            try:
+                archives=standardize_yupoo_downloads(source,self.output)
+                self.after(0,lambda:self._finish_yupoo_archive_folder(task,source,archives))
+            except Exception as e:
+                detail=f"{type(e).__name__}: {e}"
+                update_task(task,status="失败",output_path=str(self.output),detail=detail)
+                self.after(0,lambda: (self.status.set("又拍目录转换失败。"),messagebox.showerror(APP_NAME,f"无法从所选文件夹生成标准档案：\n{detail}")))
+        threading.Thread(target=work,daemon=True).start()
+
+    def _finish_yupoo_archive_folder(self,task,source,archives):
+        self.load_standard_archives(archives)
+        update_task(task,status="待复核",product_count=len(archives),output_path=str(self.output),detail=f"已从所选目录初步生成 {len(archives)} 款标准档案：\n{source}")
+        self.status.set(f"已初步生成 {len(archives)} 款标准档案，请在产品复核中补充资料。")
 
     def _yupoo_complete(self,output,summary):
         self.status.set("又拍采集完成；正在转换为标准产品档案。")
