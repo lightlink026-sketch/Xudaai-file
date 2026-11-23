@@ -960,7 +960,11 @@ class Workbench(tk.Tk):
                         record_source("1688/OpenCLI",item_result["supplier"],item_result["title"],str(path),str(item_result.get("details",{}).get("_source_url") or url),"待复核",["箱规尺寸","单箱毛重"])
                     completed+=len(items);completed_urls+=1
                     if is_shop:
-                        results.append(f"成功：{result['supplier']} 店铺，{len(items)} 款商品；Excel：{result.get('workbook','')} — {url}")
+                        item_warnings=sum(bool(item.get("item_error")) for item in items)
+                        asset_warnings=sum(bool(item.get("asset_error")) for item in items)
+                        media_images=sum(int(item.get("asset_count",0)) for item in items)
+                        warning_text=(f"；属性读取失败 {item_warnings} 款，素材下载失败 {asset_warnings} 款" if item_warnings or asset_warnings else "")
+                        results.append(f"成功：{result['supplier']} 店铺，{len(items)} 款标准档案，已保存图片/视频 {media_images} 个{warning_text}；Excel：{result.get('workbook','')} — {url}")
                     else:
                         results.append(f"成功：{result['title']} — {url}")
                 except Exception as e:results.append(f"失败：{url} — {type(e).__name__}: {e}")
