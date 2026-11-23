@@ -24,7 +24,7 @@ Windows 打包：运行 build_windows.ps1，输出 dist/Xudaai产品档案工作
 
 ## 本地数据
 
-档案默认输出到“文档/Xudaai产品档案”。独立任务库为 .xudaai-archivist-tasks.sqlite3，来源索引为 .xudaai-archivist-sources.sqlite3。模型密钥只保留在运行内存；模型地址和名称可保存到用户配置。
+档案默认输出到“文档/Xudaai产品档案”。独立任务库为 .xudaai-archivist-tasks.sqlite3，来源索引为 .xudaai-archivist-sources.sqlite3。AI API Key 使用 Windows DPAPI 加密保存在本机用户配置；对话记录也加密保存在本机。
 
 上传接口使用 Xudaai 的 /api/products/import。服务端限制单个产品最多 250 个文件、单文件 250 MB、单产品总量 750 MB。
 
@@ -38,6 +38,6 @@ Windows 打包：运行 build_windows.ps1，输出 dist/Xudaai产品档案工作
 
 Yupoo 采集器直接嵌入其原有完整界面和处理流程，源码依据 `D:\ruanjian\Yupoo桌面工具\app.py`；不会另开桌面工具窗口。采集完成后自动把相册和详情转换为标准产品目录，补录字段保存在产品档案.json；确认完整的下载才替换图片，未完成下载保留上一版图片。转换成功后删除临时原始下载目录，任务中心指向标准档案。
 
-1688 链接支持每行一个批量采集；可在 1688 页选择本机 `opencli.exe` / `.cmd` / `.bat`，点击“检查并启动”验证命令，并保存路径供后续使用。也可在 AI 助手粘贴单个链接，确认后调用本机 OpenCLIApp 的 `1688 item` 与 `1688 download` 命令。保持 1688 登录会话有效。店铺列表和商品详情是不同采集模式，当前链接入口针对商品详情页。
+1688 链接支持每行一个批量采集；可在 1688 页选择本机 `opencli.exe` / `.cmd` / `.bat`，点击“检查并启动”检测浏览器会话。只有一个登录会话时自动使用；多个会话时可手动选择。商品详情链接调用 `1688 item` 与 `1688 download`；工厂/店铺链接先用 `1688 store` 解析店铺，再运行 `1688 shop-products` 导出带主图的 Excel。商品逐款保存到供应商独立目录，并写入来源信息和主图，能在采集页勾选后批量初步建档；任务中心记录商品数量、命令进度和失败原因。保持所选 Chrome 会话已登录 1688。
 
 真实供应商账号和 Xudaai 服务端联调需在目标电脑确认登录状态和接口更新语义。

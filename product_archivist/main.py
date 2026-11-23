@@ -9,7 +9,7 @@ from tkinter import filedialog, messagebox, ttk, simpledialog
 
 import httpx
 from core import DOC_EXTS, IMAGE_EXTS, SUPPORTED_EXTS, VIDEO_EXTS, make_product_package, missing_product_fields, read_product_rows, read_text, safe_stem, scan_product_folder
-from opencli_adapter import check_opencli, download_1688
+from opencli_adapter import check_1688_profiles, check_opencli, download_1688, download_1688_shop_products, resolve_1688_profile
 from source_records import record_source
 from task_center import create_task, update_task, list_tasks, list_all_tasks, delete_tasks
 from yupoo_tool import App as YupooProcessor
@@ -86,7 +86,7 @@ class Workbench(tk.Tk):
         self.cfg=cfg_read(); self.output=Path(self.cfg.get("output",str(BASE))); self.batch=[]; self.selected=None; self.packages=[]; self.task_queue=queue.Queue();self.ai_profiles=self.cfg.get("ai_profiles",[]);self.current_profile=self.cfg.get("active_ai_profile","");self.ai_key=tk.StringVar(value="")
         self.conversations={"新对话":[]};self.conversation_logs={"新对话":[]};self.current_conversation="新对话";self.ai_history=self.conversations[self.current_conversation];self.conversation_storage_ok=True
         self._restore_local_conversations()
-        self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.cli_executable=tk.StringVar(value=self.cfg.get("opencli_path",""));self.current_module="采集与导入";self.active_task=None
+        self.ai_url=tk.StringVar(value=self.cfg.get("ai_url","https://api.siliconflow.cn/v1"));self.ai_model=tk.StringVar(value=self.cfg.get("ai_model",""));self.cli_executable=tk.StringVar(value=self.cfg.get("opencli_path",""));self.cli_profile=tk.StringVar(value=self.cfg.get("opencli_profile",""));self.current_module="采集与导入";self.active_task=None
         self._restore_local_api_key()
         self._style(); self._layout(); self.protocol("WM_DELETE_WINDOW",self._close_workbench);self.show("采集与导入")
         if not self.conversation_storage_ok:self.status.set("无法读取本地对话存档；原文件已保留。")
@@ -458,7 +458,11 @@ class Workbench(tk.Tk):
         ttk.Label(row,text="OpenCLIApp",width=14,anchor="w",background="white").pack(side="left")
         ttk.Entry(row,textvariable=self.cli_executable,style="Compact.TEntry").pack(side="left",fill="x",expand=True,padx=6,ipady=2)
         ttk.Button(row,text="浏览",style="Compact.TButton",command=self.choose_opencli).pack(side="left",padx=3,ipady=2)
-        ttk.Button(row,text="检查并启动",style="Compact.TButton",command=self.check_opencli_connection).pack(side="left",padx=3,ipady=2)
+        profile_row=ttk.Frame(c,style="Card.TFrame");profile_row.pack(fill="x",pady=(7,0))
+        ttk.Label(profile_row,text="浏览器会话",width=14,anchor="w",background="white").pack(side="left")
+        self.cli_profile_box=ttk.Combobox(profile_row,textvariable=self.cli_profile,state="readonly",width=18,style="Compact.TCombobox",values=())
+        self.cli_profile_box.pack(side="left",padx=6,ipady=1)
+        ttk.Button(profile_row,text="检查并启动",style="Compact.TButton",command=self.check_opencli_connection).pack(side="left",padx=3,ipady=2)
         actions=ttk.Frame(c,style="Card.TFrame");actions.pack(fill="x",pady=(8,0))
         self.opencli_status=tk.StringVar(value="未检查 OpenCLIApp")
         ttk.Label(actions,textvariable=self.opencli_status,style="Muted.TLabel").pack(side="left")
@@ -894,29 +898,65 @@ class Workbench(tk.Tk):
         output.mkdir(parents=True,exist_ok=True)
         self.cfg["opencli_output"]=str(output);CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
         task=create_task("download","1688/OpenCLI","\n".join(urls),str(output)); self.status.set(f"正在调用 OpenCLIApp（0/{len(urls)}）…")
+        selected_profile=self.cli_profile.get().strip() if hasattr(self,"cli_profile") else self.cfg.get("opencli_profile","")
         def work():
-            results=[];completed=[]
+            results=[];completed=0;completed_urls=0
+            try:
+                profile=resolve_1688_profile(executable,selected_profile)
+                self.cfg["opencli_profile"]=profile
+                CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+                self.after(0,lambda p=profile:self._select_opencli_profile(p))
+            except Exception as error:
+                detail=f"浏览器会话检查失败：{type(error).__name__}: {error}"
+                update_task(task,status="失败",product_count=0,output_path=str(output),detail=detail,progress=0)
+                self.after(0,lambda d=detail:self._finish_1688_collection(output,0,len(urls),0,d))
+                return
             for index,url in enumerate(urls,1):
                 try:
-                    result=download_1688(url,output,executable=executable); path=Path(result["product_dir"])
-                    record_source("1688/OpenCLI",result["supplier"],result["title"],str(path),url,"待复核",["箱规尺寸","单箱毛重"])
-                    completed.append(path);results.append(f"成功：{result['title']} — {url}")
+                    def progress(message, item=index):
+                        ratio=re.search(r"(\d+)\s*/\s*(\d+)",message)
+                        local=min(.92,max(.08,(int(ratio.group(1))/max(1,int(ratio.group(2)))) if ratio else .12))
+                        percent=((item-1+local)/len(urls))*92
+                        update_task(task,status=f"shop-products：{message[:180]}",product_count=completed,output_path=str(output),detail="\n".join(results+[f"处理中：{url}",message]),progress=percent)
+                        self.after(0,lambda i=item,n=len(urls),m=message:self.status.set(f"1688 采集中（{i}/{n}）：{m[:90]}"))
+                    host_match=re.match(r"https?://([^/:]+)",url,re.I)
+                    host=host_match.group(1).lower() if host_match else ""
+                    is_shop=("/factory/" in url.lower() or "/page/offerlist.htm" in url.lower() or (host.endswith(".1688.com") and host not in {"detail.1688.com","www.1688.com","m.1688.com"}))
+                    if is_shop:
+                        result=download_1688_shop_products(url,output,executable=executable,profile=profile,on_progress=progress)
+                        items=result.get("products",[])
+                    else:
+                        result=download_1688(url,output,executable=executable,profile=profile)
+                        items=[result]
+                    for item_result in items:
+                        path=Path(item_result["product_dir"])
+                        record_source("1688/OpenCLI",item_result["supplier"],item_result["title"],str(path),str(item_result.get("details",{}).get("_source_url") or url),"待复核",["箱规尺寸","单箱毛重"])
+                    completed+=len(items);completed_urls+=1
+                    if is_shop:
+                        results.append(f"成功：{result['supplier']} 店铺，{len(items)} 款商品；Excel：{result.get('workbook','')} — {url}")
+                    else:
+                        results.append(f"成功：{result['title']} — {url}")
                 except Exception as e:results.append(f"失败：{url} — {type(e).__name__}: {e}")
                 progress=index*100/len(urls);detail="\n".join(results)
-                update_task(task,status=f"下载中 {index}/{len(urls)}",product_count=len(completed),output_path=str(output),detail=detail,progress=progress)
+                update_task(task,status=f"下载中 {index}/{len(urls)}",product_count=completed,output_path=str(output),detail=detail,progress=progress)
                 self.after(0,lambda i=index,n=len(urls):self.status.set(f"正在调用 OpenCLIApp（{i}/{n}）…"))
-            ok=sum(line.startswith("成功：") for line in results);failed=len(results)-ok
+            ok=completed_urls;failed=len(results)-ok
             state=f"下载完成：成功 {ok} / 失败 {failed}" if ok else "失败"
-            update_task(task,status=state,product_count=ok,output_path=str(output),detail="\n".join(results),progress=100 if ok==len(urls) else len(completed)*100/len(urls))
-            self.after(0,lambda:self._finish_1688_collection(output,ok,failed))
+            update_task(task,status=state,product_count=completed,output_path=str(output),detail="\n".join(results),progress=100 if ok==len(urls) else len(completed_urls)*100/len(urls))
+            self.after(0,lambda:self._finish_1688_collection(output,ok,failed,completed,"\n".join(results)))
         threading.Thread(target=work,daemon=True).start()
 
-    def _finish_1688_collection(self,output,ok,failed):
+    def _finish_1688_collection(self,output,ok,failed,product_count=0,detail=""):
         products=self._discover_archive_folders("1688",output)
         files=sum(entry[1] for entry in products)
         if hasattr(self,"cli_download_summary"):
-            self.cli_download_summary.set(f"已发现 {len(products)} 款产品、{files} 个素材文件；可勾选后初步建档。")
-        self.status.set(f"OpenCLIApp 下载完成：成功 {ok}，失败 {failed}；共 {len(products)} 款、{files} 个文件。")
+            self.cli_download_summary.set(f"本次采集 {product_count} 款；目录共发现 {len(products)} 款、{files} 个素材文件；可勾选后初步建档。")
+        self.status.set(f"OpenCLIApp 采集完成：成功 {ok} 个链接，失败 {failed}；本次 {product_count} 款商品，目录共 {len(products)} 款、{files} 个素材文件。")
+        summary=f"1688采集已结束：成功 {ok} 个链接，失败 {failed}；本次得到 {product_count} 款商品。"
+        if failed:
+            failures=[line for line in str(detail).splitlines() if line.startswith("失败：")]
+            summary+="\n\n失败原因：\n"+"\n".join(failures[:3]) if failures else "\n请查看“下载资料与进度”中的任务详情。"
+        self._chat_line("系统",summary)
         if hasattr(self,"download_product_tree"):self.refresh_download_board()
 
     def get_cli_urls(self):
@@ -941,11 +981,31 @@ class Workbench(tk.Tk):
         def work():
             try:
                 result=check_opencli(executable)
-                self.cfg["opencli_path"]=result["path"];CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
-                self.after(0,lambda:self.opencli_status.set(f"已连接：{result['path']}"));self.after(0,lambda:self.status.set("OpenCLIApp 检查成功。"))
+                profiles=check_1688_profiles(executable)
+                authenticated=profiles["authenticated"]
+                selected=self.cli_profile.get().strip() if hasattr(self,"cli_profile") else ""
+                if selected not in authenticated:
+                    selected=authenticated[0] if len(authenticated)==1 else ""
+                self.cfg["opencli_path"]=result["path"]
+                if selected:self.cfg["opencli_profile"]=selected
+                CONFIG.write_text(json.dumps(self.cfg,ensure_ascii=False,indent=2),encoding="utf-8")
+                self.after(0,lambda p=profiles["profiles"]:self._update_opencli_profiles(p))
+                if selected:self.after(0,lambda p=selected:self._select_opencli_profile(p))
+                message=(f"已连接；检测到 {len(profiles['profiles'])} 个会话，{len(authenticated)} 个已登录"+(f"，已选择 {selected}" if selected else "，请选择已登录会话"))
+                self.after(0,lambda m=message:self.opencli_status.set(m));self.after(0,lambda:self.status.set("OpenCLIApp 与 1688 登录会话检查完成。"))
             except Exception as e:
                 self.after(0,lambda error=str(e):self.opencli_status.set(f"检查失败：{error}"));self.after(0,lambda error=str(e):self.status.set(f"OpenCLIApp 检查失败：{error}"))
         threading.Thread(target=work,daemon=True).start()
+
+    def _update_opencli_profiles(self,profiles):
+        if hasattr(self,"cli_profile_box"):
+            self.cli_profile_box.configure(values=profiles)
+            if self.cli_profile.get() not in profiles:self.cli_profile.set("")
+
+    def _select_opencli_profile(self,profile):
+        self.cli_profile.set(profile)
+        if hasattr(self,"cli_profile_box") and profile not in self.cli_profile_box.cget("values"):
+            self.cli_profile_box.configure(values=(*self.cli_profile_box.cget("values"),profile))
 
     def request_1688_via_ai(self):
         urls=self.get_cli_urls()
@@ -1298,7 +1358,7 @@ class Workbench(tk.Tk):
         if not messagebox.askyesno(APP_NAME,f"AI 已将请求识别为 {source} 采集。\n\n链接：{planned_url}\n\n是否现在调用本机采集器？"):
             self._chat_line("系统","已取消采集。");return
         if source=="1688/OpenCLI":
-            self.set_cli_urls(planned_url);self.start_1688();self._chat_line("系统","已确认，正在调用本机 OpenCLIApp。完成后可在当前采集页查看商品数量、勾选并初步建档。")
+            self.set_cli_urls(planned_url);self.start_1688();self._chat_line("系统","已确认，采集任务已提交到本机 OpenCLIApp；工厂/店铺链接会使用 1688 shop-products。完成或失败后会在此处显示实际结果，并可在当前采集页勾选商品初步建档。")
         else:
             self.start_yupoo_with_url(planned_url);self._chat_line("系统","已确认，正在使用嵌入的又拍采集器下载资料。进度和原始文件清单可在当前采集工作台查看。")
 

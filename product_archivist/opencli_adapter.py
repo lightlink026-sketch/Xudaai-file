@@ -6,6 +6,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,15 +29,46 @@ def _opencli(configured: str | None = None) -> str:
     raise RuntimeError("没有找到 OpenCLI。请先安装 OpenCLIApp，并确保 opencli 命令可在 Windows 终端运行。")
 
 
-def _run(args: list[str], timeout: int = 900, executable: str | None = None) -> str:
+def _run(args: list[str], timeout: int = 900, executable: str | None = None,
+         profile: str | None = None, progress_file: Path | None = None,
+         on_progress: Any | None = None) -> str:
     exe = _opencli(executable)
-    command = [exe, *args]
+    command = [exe, *( ["--profile", profile] if profile else [] ), *args]
     if os.name == "nt" and Path(exe).suffix.lower() in {".cmd", ".bat"}:
         command = [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", subprocess.list2cmdline(command)]
-    completed = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
-    output = (completed.stdout or "").strip()
-    if completed.returncode:
-        raise RuntimeError((completed.stderr or output or f"OpenCLI 退出码 {completed.returncode}").strip()[-5000:])
+    progress_file = Path(progress_file) if progress_file else None
+    last_progress = ""
+    deadline = time.monotonic() + timeout
+    started_at = time.time()
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8", errors="replace") as captured:
+        process = subprocess.Popen(command, stdout=captured, stderr=subprocess.STDOUT, text=True)
+        while process.poll() is None:
+            current_progress = progress_file
+            if progress_file and progress_file.is_dir():
+                candidates = [path for path in progress_file.glob("*.progress.txt") if path.stat().st_mtime >= started_at - 1]
+                current_progress = max(candidates, key=lambda path: path.stat().st_mtime) if candidates else None
+            if current_progress and on_progress and current_progress.is_file():
+                try:
+                    lines = current_progress.read_text(encoding="utf-8", errors="replace").splitlines()
+                    current = lines[-1].strip() if lines else ""
+                    if current and current != last_progress:
+                        last_progress = current
+                        on_progress(current)
+                except OSError:
+                    pass
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                process.kill()
+                process.wait()
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                process.wait(timeout=min(0.5, remaining))
+            except subprocess.TimeoutExpired:
+                continue
+        captured.seek(0)
+        output = captured.read().strip()
+    if process.returncode:
+        raise RuntimeError((output or f"OpenCLI 退出码 {process.returncode}").strip()[-5000:])
     return output
 
 
@@ -47,6 +79,49 @@ def check_opencli(executable: str | None = None) -> dict[str, str]:
     except subprocess.TimeoutExpired:
         raise RuntimeError("OpenCLIApp 启动检查超时。")
     return {"path": exe, "output": output[:1000]}
+
+
+def list_1688_profiles(executable: str | None = None) -> list[str]:
+    """Return Browser Bridge profile ids connected to the local OpenCLI instance."""
+    output = _run(["profile", "list"], timeout=20, executable=executable)
+    return list(dict.fromkeys(re.findall(r"^\s*([A-Za-z0-9_-]+)\s+[—-]\s+connected\b", output, re.I | re.M)))
+
+
+def resolve_1688_profile(executable: str | None = None, selected: str = "") -> str:
+    """Choose the requested authenticated session, or the sole authenticated session."""
+    profiles = list_1688_profiles(executable)
+    if selected:
+        if selected not in profiles:
+            raise RuntimeError(f"浏览器会话 {selected} 已断开，请刷新会话列表后重试。")
+        candidates = [selected]
+    else:
+        candidates = profiles
+    authenticated: list[str] = []
+    for profile in candidates:
+        try:
+            _run(["1688", "whoami", "--format", "json"], timeout=25, executable=executable, profile=profile)
+            authenticated.append(profile)
+        except RuntimeError:
+            continue
+    if selected and not authenticated:
+        raise RuntimeError(f"浏览器会话 {selected} 未登录 1688，请在对应 Chrome 窗口登录后检查。")
+    if len(authenticated) == 1:
+        return authenticated[0]
+    if not authenticated:
+        raise RuntimeError("没有已登录 1688 的浏览器会话。请在 Chrome 中登录 1688，再点“检查并启动”刷新会话。")
+    raise RuntimeError("检测到多个已登录的 1688 会话。请在“浏览器会话”列表中选定一个后重试。")
+
+
+def check_1688_profiles(executable: str | None = None) -> dict[str, Any]:
+    profiles = list_1688_profiles(executable)
+    authenticated = []
+    for profile in profiles:
+        try:
+            _run(["1688", "whoami", "--format", "json"], timeout=25, executable=executable, profile=profile)
+            authenticated.append(profile)
+        except RuntimeError:
+            pass
+    return {"profiles": profiles, "authenticated": authenticated}
 
 
 def _json_payload(text: str) -> Any:
@@ -62,12 +137,13 @@ def _json_payload(text: str) -> Any:
     return {}
 
 
-def download_1688(url: str, output_root: Path, executable: str | None = None) -> dict[str, Any]:
+def download_1688(url: str, output_root: Path, executable: str | None = None,
+                  profile: str | None = None) -> dict[str, Any]:
     if not re.search(r"(^|\.)1688\.com|detail\.1688\.com", url, re.I):
         raise ValueError("请输入有效的 1688 商品或店铺链接。")
     output_root = output_root.expanduser().resolve()
     output_root.mkdir(parents=True, exist_ok=True)
-    details_text = _run(["1688", "item", url, "--format", "json"], timeout=240, executable=executable)
+    details_text = _run(["1688", "item", url, "--format", "json"], timeout=240, executable=executable, profile=profile)
     details = _json_payload(details_text)
     if isinstance(details, list): details = details[0] if details else {}
     if not isinstance(details, dict): details = {}
@@ -86,7 +162,128 @@ def download_1688(url: str, output_root: Path, executable: str | None = None) ->
     product_dir.mkdir(parents=True, exist_ok=True)
     assets_dir = product_dir / "原始资料" / "1688下载素材"
     assets_dir.mkdir(parents=True, exist_ok=True)
-    _run(["1688", "download", url, "--output", str(assets_dir), "--format", "json"], timeout=900, executable=executable)
+    _run(["1688", "download", url, "--output", str(assets_dir), "--format", "json"], timeout=900, executable=executable, profile=profile)
     (product_dir / "1688商品信息.json").write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding="utf-8")
     (product_dir / "原始资料" / "1688商品信息.json").write_text(json.dumps(details, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"supplier": supplier, "title": title, "product_dir": str(product_dir), "source_dir": str(product_dir), "details": details, "source_product_id": item_id}
+
+
+def _first_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, list):
+        return next((item for item in value if isinstance(item, dict)), {})
+    return value if isinstance(value, dict) else {}
+
+
+def download_1688_shop_products(url: str, output_root: Path, executable: str | None = None,
+                                profile: str | None = None, max_pages: int = 100,
+                                on_progress: Any | None = None) -> dict[str, Any]:
+    """Resolve a 1688 factory/store page and run shop-products to build per-item folders."""
+    if not re.search(r"(^|\.)1688\.com", url, re.I):
+        raise ValueError("请输入有效的 1688 工厂或店铺链接。")
+    if not 1 <= int(max_pages) <= 100:
+        raise ValueError("shop-products 最大页数必须在 1–100 之间。")
+    output_root = output_root.expanduser().resolve()
+    output_root.mkdir(parents=True, exist_ok=True)
+
+    if "/factory/" in url.lower():
+        if on_progress:
+            on_progress("正在解析工厂主页和店铺商品列表")
+        store_data = _first_dict(_json_payload(_run(
+            ["1688", "store", url, "--format", "json"], timeout=240,
+            executable=executable, profile=profile)))
+        offerlist_url = str(store_data.get("store_url") or store_data.get("shop_url") or "").strip()
+        if not offerlist_url:
+            raise RuntimeError("1688 工厂主页未返回店铺商品列表地址，暂时无法运行 shop-products。")
+        store_name = str(store_data.get("store_name") or store_data.get("company_name") or "1688 店铺").strip()
+        shop_id = str(store_data.get("shop_id") or "")
+    else:
+        offerlist_url = url
+        store_name = "1688 店铺"
+        shop_id = ""
+    if "/page/offerlist.htm" not in offerlist_url.lower():
+        offerlist_url = offerlist_url.rstrip("/") + "/page/offerlist.htm"
+
+    supplier_dir = output_root / safe_stem(store_name)
+    supplier_dir.mkdir(parents=True, exist_ok=True)
+    workbook_path = supplier_dir / f"1688店铺商品清单_{__import__('datetime').datetime.now():%Y%m%d_%H%M%S}.xlsx"
+    if on_progress:
+        on_progress("正在用 1688 shop-products 抓取商品列表和主图")
+    started_at = time.time()
+    output = _run(["1688", "shop-products", offerlist_url, "--maxPages", str(int(max_pages)),
+                   "--output", str(workbook_path), "--format", "json"], timeout=1200,
+                  executable=executable, profile=profile, progress_file=supplier_dir,
+                  on_progress=on_progress)
+    if not workbook_path.is_file():
+        # OpenCLI may name the export after the shop id; accept the newest workbook
+        # in this isolated supplier folder, but never scan unrelated output folders.
+        candidates = sorted((path for path in supplier_dir.glob("*.xlsx") if path.stat().st_mtime >= started_at - 1),
+                            key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            workbook_path = candidates[0]
+        else:
+            raise RuntimeError(f"shop-products 已结束，但没有找到导出的 Excel。\n{output[-2000:]}")
+
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(workbook_path, read_only=False, data_only=True)
+    products: list[dict[str, Any]] = []
+    try:
+        sheet = workbook.active
+        embedded_images: dict[int, list[Any]] = {}
+        for image in sheet._images:
+            row_number = image.anchor._from.row + 1
+            embedded_images.setdefault(row_number, []).append(image)
+        for row_number in range(2, sheet.max_row + 1):
+            offer_id = str(sheet.cell(row_number, 1).value or "").strip()
+            detail_url = str(sheet.cell(row_number, 2).value or "").strip()
+            title = str(sheet.cell(row_number, 3).value or "").strip()
+            if not title and not offer_id and not detail_url:
+                continue
+            title = title or f"1688 商品 {offer_id or row_number}"
+            offer_id = offer_id or (re.search(r"offer/(\d+)", detail_url).group(1) if re.search(r"offer/(\d+)", detail_url) else str(row_number))
+            price = sheet.cell(row_number, 4).value
+            sales = sheet.cell(row_number, 5).value
+            moq = sheet.cell(row_number, 6).value
+            image_url = str(sheet.cell(row_number, 8).value or "").strip()
+            page = sheet.cell(row_number, 9).value
+            details = {"offer_id": offer_id, "title": title, "seller_name": store_name,
+                       "supplier_name": store_name, "price": price, "moq": moq,
+                       "sales_text": sales, "image_url": image_url, "page": page,
+                       "_source_url": detail_url or offerlist_url, "store_url": offerlist_url,
+                       "shop_id": shop_id}
+            product_dir = supplier_dir / f"{safe_stem(title)}_{safe_stem(offer_id)}"
+            existing_meta = product_dir / "1688商品信息.json"
+            if product_dir.exists():
+                try:
+                    previous = json.loads(existing_meta.read_text(encoding="utf-8")) if existing_meta.is_file() else {}
+                except (OSError, ValueError):
+                    previous = {}
+                if str(previous.get("offer_id") or "") != offer_id:
+                    suffix = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+                    product_dir = supplier_dir / f"{safe_stem(title)}_{safe_stem(offer_id)}_{suffix}"
+            product_dir.mkdir(parents=True, exist_ok=True)
+            source_dir = product_dir / "原始资料"
+            assets_dir = source_dir / "1688下载素材"
+            assets_dir.mkdir(parents=True, exist_ok=True)
+            metadata = json.dumps(details, ensure_ascii=False, indent=2)
+            if not (product_dir / "1688商品信息.json").exists():
+                (product_dir / "1688商品信息.json").write_text(metadata, encoding="utf-8")
+            if not (source_dir / "1688商品信息.json").exists():
+                (source_dir / "1688商品信息.json").write_text(metadata, encoding="utf-8")
+            for image_index, image in enumerate(embedded_images.get(row_number, []), 1):
+                extension = str(getattr(image, "format", "jpeg") or "jpeg").lower().replace("jpg", "jpeg")
+                extension = extension if extension in {"jpeg", "png", "webp", "gif"} else "jpeg"
+                image_path = assets_dir / f"主图_{image_index}.{extension}"
+                if not image_path.exists():
+                    image_path.write_bytes(image._data())
+            products.append({"supplier": store_name, "title": title, "product_dir": str(product_dir),
+                             "source_dir": str(product_dir), "details": details,
+                             "source_product_id": offer_id})
+    finally:
+        workbook.close()
+    if not products:
+        raise RuntimeError(f"shop-products 没有找到商品行，请检查店铺登录状态和页面。\n{output[-2000:]}")
+    return {"supplier": store_name, "title": f"{store_name} 店铺商品", "product_dir": str(supplier_dir),
+            "source_dir": str(supplier_dir), "details": {"store_url": offerlist_url},
+            "products": products, "product_count": len(products), "workbook": str(workbook_path),
+            "source_product_id": shop_id}
